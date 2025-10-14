@@ -6,7 +6,7 @@ set -e
 echo "=== 从GitHub拉取打印服务文件并替换 ==="
 
 # GitHub仓库文件URL
-REPO_URL="https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main"
+REPO_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main"
 CUPS_URL="$REPO_URL/configs/cupsd.conf"
 PHP_URL="$REPO_URL/configs/print.php"
 
