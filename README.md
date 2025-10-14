@@ -6,4 +6,5 @@
 
 ### 方法一：直接运行（推荐）
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/your-username/print-service-deploy/main/deploy-print-service.sh)"
+
+sudo bash -c "$(curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/deploy-print-service.sh)"
