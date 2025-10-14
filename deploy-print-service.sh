@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 小程序打印服务自动部署脚本
-# GitHub: https://github.com/your-username/print-service-deploy
+# GitHub: https://github.com/tzi-shue/print-service-deploy
 
 set -e
 
@@ -94,7 +94,7 @@ download_configs() {
     cd "$temp_dir"
     
     # 从GitHub下载文件
-    local repo_url="https://raw.githubusercontent.com/your-username/print-service-deploy/main"
+    local repo_url="https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main"
     
     log "下载CUPS配置文件..."
     curl -fsSL -o cupsd.conf "$repo_url/configs/cupsd.conf"
