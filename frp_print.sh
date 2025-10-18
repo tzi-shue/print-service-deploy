@@ -9,7 +9,7 @@ FONT="\033[0m"
 
 # 全局变量
 SERVICE_NAME=""
-REPO_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main"  
+REPO_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy"
 FRP_NAME="frpc"
 FRP_VERSION="0.61.0"
 FRP_PATH="/usr/local/frp"
@@ -37,15 +37,11 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# 第一步：检查并安装依赖软件
-info "开始检查并安装依赖软件"
+# 第一步：仅检查并安装LibreOffice
+info "开始检查并安装必要依赖"
 
 # 定义需要安装的软件
-CUPS_PACKAGE="cups"
 LIBREOFFICE_PACKAGE="libreoffice"
-PHP_PACKAGE="php"
-# Web服务器优先级：apache2 > nginx > httpd
-WEB_PACKAGES=("apache2" "nginx" "httpd")
 
 # 检查包管理器
 if type apt-get >/dev/null 2>&1; then
@@ -64,16 +60,6 @@ fi
 info "更新包索引"
 eval $PM_UPDATE || error_exit "更新包索引失败"
 
-# 检查并安装CUPS
-if ! command_exists cupsd; then
-    info "安装CUPS"
-    $PM_INSTALL $CUPS_PACKAGE || error_exit "安装CUPS失败"
-    systemctl start cups || error_exit "启动CUPS失败"
-    systemctl enable cups || error_exit "设置CUPS开机启动失败"
-else
-    info "CUPS已安装，跳过"
-fi
-
 # 检查并安装LibreOffice
 if ! command_exists soffice; then
     info "安装LibreOffice"
@@ -82,38 +68,11 @@ else
     info "LibreOffice已安装，跳过"
 fi
 
-# 检查并安装PHP
-if ! command_exists php; then
-    info "安装PHP"
-    $PM_INSTALL $PHP_PACKAGE || error_exit "安装PHP失败"
-else
-    info "PHP已安装，跳过"
-fi
-
-# 检查并安装Web服务器
-WEB_INSTALLED=0
-for web in "${WEB_PACKAGES[@]}"; do
-    if command_exists $web; then
-        info "$web已安装，跳过"
-        WEB_INSTALLED=1
-        break
-    fi
-done
-
-if [ $WEB_INSTALLED -eq 0 ]; then
-    # 安装第一个可用的Web服务器
-    info "安装Web服务器(${WEB_PACKAGES[0]})"
-    $PM_INSTALL ${WEB_PACKAGES[0]} || error_exit "安装${WEB_PACKAGES[0]}失败"
-    systemctl start ${WEB_PACKAGES[0]} || error_exit "启动${WEB_PACKAGES[0]}失败"
-    systemctl enable ${WEB_PACKAGES[0]} || error_exit "设置${WEB_PACKAGES[0]}开机启动失败"
-fi
-
 # 第二步：执行打印服务配置
 info "开始执行打印服务配置"
 
-# 创建临时目录并进入（全局临时目录，供FRP步骤使用）
+# 创建临时目录并进入
 TEMP_DIR=$(mktemp -d) || error_exit "创建临时目录失败"
-info "创建临时工作目录: $TEMP_DIR"
 cd "$TEMP_DIR" || error_exit "进入临时目录失败"
 
 # 下载配置文件
@@ -135,10 +94,13 @@ mkdir -p /var/www/html
 cp print.php /var/www/html/print.php || error_exit "替换print.php失败"
 chmod 644 /var/www/html/print.php
 
-# 重启相关服务
-info "重启服务"
-systemctl restart cups || error_exit "重启cups服务失败"
-systemctl restart apache2 2>/dev/null || systemctl restart nginx 2>/dev/null || systemctl restart httpd 2>/dev/null
+# 重启相关服务（非强制，失败不中断）
+info "重启相关服务"
+systemctl restart cups 2>/dev/null || warn "cups服务重启失败，可能未安装或未运行"
+systemctl restart apache2 2>/dev/null || systemctl restart nginx 2>/dev/null || systemctl restart httpd 2>/dev/null || warn "Web服务重启失败，可能未安装或未运行"
+
+# 清理临时文件
+rm -rf "$TEMP_DIR"
 
 info "打印服务配置完成"
 echo -e "${GREEN}CUPS配置: /etc/cups/cupsd.conf${FONT}"
@@ -191,7 +153,6 @@ case $(uname -m) in
 esac
 
 FILE_NAME="frp_${FRP_VERSION}_linux_${PLATFORM}"
-FRP_TAR_FILE="${TEMP_DIR}/${FILE_NAME}.tar.gz"  # 使用全局临时目录存储下载文件
 
 # 下载FRP
 info "下载FRP客户端"
@@ -204,14 +165,12 @@ else
     warn "检测到代理失效，将使用官方地址下载"
 fi
 
-# 关键修复：使用统一临时目录下载并指定完整路径
-wget "$DOWNLOAD_URL" -O "$FRP_TAR_FILE" || error_exit "下载FRP失败"
+wget -P "$(dirname "$0")" "$DOWNLOAD_URL" -O "${FILE_NAME}.tar.gz" || error_exit "下载FRP失败"
 
-# 解压并安装（使用临时目录的完整路径）
-info "解压FRP客户端"
-tar -zxvf "$FRP_TAR_FILE" -C "$TEMP_DIR" || error_exit "解压FRP失败"
+# 解压并安装
+tar -zxvf "${FILE_NAME}.tar.gz" || error_exit "解压FRP失败"
 mkdir -p "${FRP_PATH}"
-mv "${TEMP_DIR}/${FILE_NAME}/${FRP_NAME}" "${FRP_PATH}" || error_exit "移动FRP文件失败"
+mv "${FILE_NAME}/${FRP_NAME}" "${FRP_PATH}" || error_exit "移动FRP文件失败"
 
 # 生成服务名称
 CURRENT_DATE=$(date +%m%d)
@@ -263,9 +222,8 @@ systemctl daemon-reload
 systemctl start "${FRP_NAME}" || error_exit "启动FRP服务失败"
 systemctl enable "${FRP_NAME}" || error_exit "设置FRP开机启动失败"
 
-# 清理临时文件（所有操作完成后清理）
-info "清理临时文件"
-rm -rf "$TEMP_DIR"
+# 清理安装文件
+rm -rf "${FILE_NAME}.tar.gz" "${FILE_NAME}"
 
 info "FRP内网穿透配置完成"
 
