@@ -1,6 +1,6 @@
 # 小程序打印服务自动安装frp、cups及所需依赖
 
-一键在Ubuntu/CentOS系统上自动安装frp及拷贝小程序打印服务文件。
+一键在Ubuntu/CentOS系统上自动安装frp、cups及所需依赖。
 
 ## 快速开始
 
@@ -33,6 +33,7 @@ sudo ./frp_print.sh
 ```bash
 sudo bash -c "$(curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/scripts/copy_print.sh)"
 ```
+
 
 
 
