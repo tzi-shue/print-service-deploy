@@ -9,6 +9,7 @@ FONT="\033[0m"
 
 # 全局变量
 SERVICE_NAME=""
+# 修复仓库URL，添加分支路径main
 REPO_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main"
 FRP_NAME="frpc"
 FRP_VERSION="0.61.0"
@@ -115,7 +116,7 @@ info "开始执行打印服务配置"
 TEMP_DIR=$(mktemp -d) || error_exit "创建临时目录失败"
 cd "$TEMP_DIR" || error_exit "进入临时目录失败"
 
-# 下载配置文件
+# 下载配置文件（URL已修复）
 info "下载配置文件"
 curl -fsSL -o cupsd.conf "${REPO_URL}/configs/cupsd.conf" || error_exit "下载cupsd.conf失败"
 curl -fsSL -o print.php "${REPO_URL}/configs/print.php" || error_exit "下载print.php失败"
@@ -184,17 +185,17 @@ check_network() {
 GOOGLE_HTTP_CODE=$(check_network "https://www.google.com")
 PROXY_HTTP_CODE=$(check_network "${PROXY_URL}")
 
-# 检查系统架构
+# 检查系统架构（细化ARM架构判断）
 case $(uname -m) in
     x86_64) PLATFORM="amd64" ;;
     aarch64) PLATFORM="arm64" ;;
-    armv7|armv7l|armhf) PLATFORM="arm" ;;
+    armv7l|armhf) PLATFORM="arm" ;;  # 更精确的ARM 32位匹配
     *) error_exit "不支持的系统架构: $(uname -m)" ;;
 esac
 
 FILE_NAME="frp_${FRP_VERSION}_linux_${PLATFORM}"
 
-# 下载FRP
+# 下载FRP（使用临时目录存储，避免路径问题）
 info "下载FRP客户端"
 if [ "$GOOGLE_HTTP_CODE" -eq 200 ]; then
     DOWNLOAD_URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${FILE_NAME}.tar.gz"
@@ -205,12 +206,13 @@ else
     warn "检测到代理失效，将使用官方地址下载"
 fi
 
-wget -P "$(dirname "$0")" "$DOWNLOAD_URL" -O "${FILE_NAME}.tar.gz" || error_exit "下载FRP失败"
+# 修复：使用临时目录存储下载文件，确保路径可写且明确
+wget -P "$TEMP_DIR" "$DOWNLOAD_URL" -O "${TEMP_DIR}/${FILE_NAME}.tar.gz" || error_exit "下载FRP失败"
 
-# 解压并安装
-tar -zxvf "${FILE_NAME}.tar.gz" || error_exit "解压FRP失败"
+# 解压并安装（使用临时目录的完整路径）
+tar -zxvf "${TEMP_DIR}/${FILE_NAME}.tar.gz" -C "$TEMP_DIR" || error_exit "解压FRP失败"
 mkdir -p "${FRP_PATH}"
-mv "${FILE_NAME}/${FRP_NAME}" "${FRP_PATH}" || error_exit "移动FRP文件失败"
+mv "${TEMP_DIR}/${FILE_NAME}/${FRP_NAME}" "${FRP_PATH}" || error_exit "移动FRP文件失败"
 
 # 生成服务名称
 CURRENT_DATE=$(date +%m%d)
@@ -263,7 +265,7 @@ systemctl start "${FRP_NAME}" || error_exit "启动FRP服务失败"
 systemctl enable "${FRP_NAME}" || error_exit "设置FRP开机启动失败"
 
 # 清理安装文件
-rm -rf "${FILE_NAME}.tar.gz" "${FILE_NAME}"
+rm -rf "${TEMP_DIR}/${FILE_NAME}.tar.gz" "${TEMP_DIR}/${FILE_NAME}"
 
 info "FRP内网穿透配置完成"
 
