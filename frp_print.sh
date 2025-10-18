@@ -142,7 +142,7 @@ fi
 
 # 第四步：输出信息并生成二维码
 echo -e "\n${GREEN}配置完成${FONT}"
-REMOTE_PRINT_ADDR="https://nas-${SERVICE_NAME}.frpc.tzishue.tk/print.php"
+REMOTE_PRINT_ADDR="http://nas-${SERVICE_NAME}.frp.tzishue.tk/print.php"
 echo -e "远程打印机地址: ${REMOTE_PRINT_ADDR}"
 
 # 生成二维码
