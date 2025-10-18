@@ -6,13 +6,13 @@
 
 ### 方法一：直接运行
 ```bash
-sudo bash -c "$(curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/scripts/frp_print.sh)"
+sudo bash -c "$(curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/frp_print.sh)"
 ```
 
 ### 方法二：直接运行
 # 1. 下载脚本到本地
 ```bash
-curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/scripts/frp_print.sh -o frp_print.sh
+curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/frp_print.sh -o frp_print.sh
 ```
 # 2. 赋予执行权限
 ```bash
@@ -31,8 +31,9 @@ sudo ./frp_print.sh
 
 ### 方法一：直接运行
 ```bash
-sudo bash -c "$(curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/scripts/copy_print.sh)"
+sudo bash -c "$(curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/copy_print.sh)"
 ```
+
 
 
 
