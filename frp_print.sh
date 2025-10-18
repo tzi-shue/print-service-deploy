@@ -9,7 +9,7 @@ FONT="\033[0m"
 
 # 全局变量
 SERVICE_NAME=""
-REPO_URL="https://ghproxy.cdf/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main"
+REPO_URL="https://ghproxy.cdf/https://raw.githubusercontent.com/tzi-shue/print-service-deploy"
 FRP_NAME="frpc"
 FRP_VERSION="0.61.0"
 FRP_PATH="/usr/local/frp"
