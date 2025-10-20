@@ -30,40 +30,106 @@ clean_cache() {
     fi
 }
 
-# 第一步：更新系统并安装完整打印服务依赖
-info "更新系统并安装打印服务完整依赖"
-clean_cache  # 先清理空间
+# 检测并安装CUPS
+install_cups_if_needed() {
+    if command_exists cupsd || systemctl status cups >/dev/null 2>&1 || [ -f /usr/sbin/cupsd ]; then
+        info "CUPS已安装，跳过安装"
+        return 0
+    fi
+    
+    info "安装CUPS打印服务"
+    if type apt-get >/dev/null 2>&1; then
+        PM="apt-get"
+        PM_INSTALL="DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends"
+    elif type yum >/dev/null 2>&1; then
+        PM="yum"
+        PM_INSTALL="yum install -y"
+    else
+        error_exit "不支持的包管理器"
+    fi
 
-if type apt-get >/dev/null 2>&1; then
-    PM="apt-get"
-    # 使用DEBIAN_FRONTEND环境变量避免交互式确认
-    PM_INSTALL="DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends"
-elif type yum >/dev/null 2>&1; then
-    PM="yum"
-    PM_INSTALL="yum install -y"
-else
-    error_exit "不支持的包管理器"
-fi
+    # 更新软件包列表
+    $PM update || warn "更新软件包列表失败，继续安装"
 
-# 更新软件包列表
-$PM update || warn "更新软件包列表失败，继续安装"
+    # 安装CUPS核心组件
+    info "安装CUPS核心组件"
+    $PM_INSTALL cups cups-filters ghostscript || {
+        clean_cache
+        $PM_INSTALL cups cups-filters ghostscript || error_exit "安装CUPS失败"
+    }
 
-# 安装完整的打印服务套件（自动确认）
-info "安装CUPS和完整LibreOffice套件"
-$PM_INSTALL cups cups-filters ghostscript libreoffice-core libreoffice-writer libreoffice-calc || {
-    # 如果安装失败，尝试清理缓存后重试
-    clean_cache
-    $PM_INSTALL cups cups-filters ghostscript libreoffice-core libreoffice-writer libreoffice-calc || error_exit "安装打印服务失败"
+    # 安装打印机驱动
+    info "安装打印机驱动"
+    $PM_INSTALL -y printer-driver-gutenprint printer-driver-splix hplip foomatic-db-engine || {
+        clean_cache
+        $PM_INSTALL -y printer-driver-gutenprint printer-driver-splix hplip foomatic-db-engine || warn "部分打印机驱动安装失败"
+    }
+
+    # 安装HP插件
+    info "安装HP打印机插件"
+    HP_PLUGIN_DIR="/tmp/hp_plugin_$$"
+    mkdir -p "$HP_PLUGIN_DIR"
+    cd "$HP_PLUGIN_DIR" || error_exit "进入HP插件目录失败"
+
+    # 下载HP插件文件
+    wget -q https://www.openprinting.org/download/printdriver/auxfiles/HP/plugins/hplip-3.20.3-plugin.run || warn "下载HP插件失败"
+    wget -q https://www.openprinting.org/download/printdriver/auxfiles/HP/plugins/hplip-3.20.3-plugin.run.asc || warn "下载HP插件签名失败"
+    wget -q https://www.openprinting.org/download/printdriver/auxfiles/HP/plugins/hp_laserjet_1020.plugin || warn "下载HP LaserJet插件失败"
+
+    # 安装HP插件（非交互模式）
+    if [ -f "hplip-3.20.3-plugin.run" ]; then
+        # 使用非交互模式安装HP插件
+        sh hplip-3.20.3-plugin.run --noexec --target ./hplip-extract
+        # 或者使用hp-plugin命令的非交互模式
+        echo "y" | hp-plugin -p 2>/dev/null || warn "HP插件安装可能存在问题，继续执行"
+    else
+        warn "HP插件下载失败，跳过安装"
+    fi
+
+    # 清理HP插件临时目录
+    cd /
+    rm -rf "$HP_PLUGIN_DIR"
+
+    # 允许远程访问 CUPS
+    info "配置CUPS远程访问"
+    cupsctl --remote-any || warn "CUPS远程访问配置失败"
 }
 
-# 仅安装二维码生成必要依赖（qrencode+基础工具）
+# 第一步：检测并安装CUPS（如需要）
+clean_cache  # 先清理空间
+install_cups_if_needed
+
+# 第二步：检测并安装LibreOffice
+if command_exists soffice; then
+    info "LibreOffice已安装"
+else
+    info "安装LibreOffice"
+    if type apt-get >/dev/null 2>&1; then
+        PM_INSTALL="DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends"
+        $PM_INSTALL libreoffice-core libreoffice-writer libreoffice-calc || {
+            clean_cache
+            $PM_INSTALL libreoffice-core libreoffice-writer libreoffice-calc || error_exit "安装LibreOffice失败"
+        }
+    elif type yum >/dev/null 2>&1; then
+        PM_INSTALL="yum install -y"
+        $PM_INSTALL libreoffice-core libreoffice-writer libreoffice-calc || error_exit "安装LibreOffice失败"
+    fi
+fi
+
+# 第三步：安装基础工具
 info "安装基础工具"
+if type apt-get >/dev/null 2>&1; then
+    PM_INSTALL="DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends"
+else
+    PM_INSTALL="yum install -y"
+fi
+
 $PM_INSTALL wget curl qrencode || {
-    clean_cache  # 再次尝试清理后安装
+    clean_cache
     $PM_INSTALL wget curl qrencode || error_exit "安装工具失败"
 }
 
-# 第二步：精简打印服务配置
+# 第四步：精简打印服务配置
 info "配置打印服务"
 TEMP_DIR=$(mktemp -d) || error_exit "创建临时目录失败"
 cd "$TEMP_DIR" || error_exit "进入临时目录失败"
@@ -76,14 +142,10 @@ curl -fsSL -o print.php "${REPO_URL}/configs/print.php" || error_exit "下载pri
 cp cupsd.conf /etc/cups/cupsd.conf && chown root:lp /etc/cups/cupsd.conf && chmod 640 /etc/cups/cupsd.conf || error_exit "替换cupsd.conf失败"
 mkdir -p /var/www/html && cp print.php /var/www/html/print.php && chmod 644 /var/www/html/print.php || error_exit "替换print.php失败"
 
-# 轻量重启服务
-systemctl restart cups 2>/dev/null || warn "cups服务未运行"
-systemctl restart apache2 2>/dev/null || systemctl restart nginx 2>/dev/null || :
-
 # 立即清理临时文件
 rm -rf "$TEMP_DIR"
 
-# 第三步：FRP配置（优化下载流程）
+# 第五步：FRP配置（优化下载流程）
 info "配置FRP内网穿透"
 
 # 检查FRP是否已安装
@@ -143,7 +205,11 @@ EOF
     systemctl start "${FRP_NAME}" && systemctl enable "${FRP_NAME}" || error_exit "启动FRP失败"
 fi
 
-# 第四步：输出信息并生成二维码
+# 第六步：重启CUPS服务
+info "重启CUPS服务"
+systemctl restart cups 2>/dev/null || service cups restart 2>/dev/null || warn "CUPS服务重启失败，请手动检查"
+
+# 第七步：输出信息并生成二维码
 echo -e "\n${GREEN}配置完成${FONT}"
 REMOTE_PRINT_ADDR="http://nas-${SERVICE_NAME}.frp.tzishue.tk/print.php"
 echo -e "远程打印机地址: ${REMOTE_PRINT_ADDR}"
@@ -153,3 +219,4 @@ echo -e "\n二维码:"
 qrencode -t ANSIUTF8 "${REMOTE_PRINT_ADDR}"
 
 echo -e "\n重启FRP命令: systemctl restart ${FRP_NAME}"
+echo -e "重启CUPS命令: systemctl restart cups"
