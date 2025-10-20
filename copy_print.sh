@@ -1,5 +1,4 @@
 #!/bin/bash
-# 直接从GitHub拉取文件并替换 - 最简化版本
 
 set -e
 
