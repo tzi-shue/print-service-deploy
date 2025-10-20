@@ -172,9 +172,13 @@ else
     mv "/tmp/${FILE_NAME}/${FRP_NAME}" "${FRP_PATH}" || error_exit "移动FRP文件失败"
     rm -rf "/tmp/${FILE_NAME}"  # 即时清理
 
-    # 生成服务名称
-    SERVICE_NAME=$(date +%m%d)$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 2)
+   # 生成服务名称
+CURRENT_DATE=$(date +%m%d)
+RANDOM_SUFFIX=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 2)
+SERVICE_NAME="${CURRENT_DATE}${RANDOM_SUFFIX}"
 
+# 生成随机 remote_port（范围：3000到6000）
+REMOTE_PORT_SSH=$((RANDOM % 3001 + 3000))
     # 生成精简FRP配置
     mkdir -p "$(dirname "${FRP_CONFIG_FILE}")"
     cat <<EOL > "${FRP_CONFIG_FILE}"
