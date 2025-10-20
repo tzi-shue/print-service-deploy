@@ -40,7 +40,8 @@ install_cups_if_needed() {
     info "安装CUPS打印服务"
     if type apt-get >/dev/null 2>&1; then
         PM="apt-get"
-        PM_INSTALL="DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends"
+        PM_INSTALL="apt-get install -y --no-install-recommends"
+        export DEBIAN_FRONTEND=noninteractive
     elif type yum >/dev/null 2>&1; then
         PM="yum"
         PM_INSTALL="yum install -y"
@@ -60,9 +61,9 @@ install_cups_if_needed() {
 
     # 安装打印机驱动
     info "安装打印机驱动"
-    $PM_INSTALL -y printer-driver-gutenprint printer-driver-splix hplip foomatic-db-engine || {
+    $PM_INSTALL printer-driver-gutenprint printer-driver-splix hplip foomatic-db-engine || {
         clean_cache
-        $PM_INSTALL -y printer-driver-gutenprint printer-driver-splix hplip foomatic-db-engine || warn "部分打印机驱动安装失败"
+        $PM_INSTALL printer-driver-gutenprint printer-driver-splix hplip foomatic-db-engine || warn "部分打印机驱动安装失败"
     }
 
     # 安装HP插件
@@ -105,29 +106,27 @@ if command_exists soffice; then
 else
     info "安装LibreOffice"
     if type apt-get >/dev/null 2>&1; then
-        PM_INSTALL="DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends"
-        $PM_INSTALL libreoffice-core libreoffice-writer libreoffice-calc || {
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer libreoffice-calc || {
             clean_cache
-            $PM_INSTALL libreoffice-core libreoffice-writer libreoffice-calc || error_exit "安装LibreOffice失败"
+            apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer libreoffice-calc || error_exit "安装LibreOffice失败"
         }
     elif type yum >/dev/null 2>&1; then
-        PM_INSTALL="yum install -y"
-        $PM_INSTALL libreoffice-core libreoffice-writer libreoffice-calc || error_exit "安装LibreOffice失败"
+        yum install -y libreoffice-core libreoffice-writer libreoffice-calc || error_exit "安装LibreOffice失败"
     fi
 fi
 
 # 第三步：安装基础工具
 info "安装基础工具"
 if type apt-get >/dev/null 2>&1; then
-    PM_INSTALL="DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y --no-install-recommends wget curl qrencode || {
+        clean_cache
+        apt-get install -y --no-install-recommends wget curl qrencode || error_exit "安装工具失败"
+    }
 else
-    PM_INSTALL="yum install -y"
+    yum install -y wget curl qrencode || error_exit "安装工具失败"
 fi
-
-$PM_INSTALL wget curl qrencode || {
-    clean_cache
-    $PM_INSTALL wget curl qrencode || error_exit "安装工具失败"
-}
 
 # 第四步：精简打印服务配置
 info "配置打印服务"
@@ -179,18 +178,13 @@ SERVICE_NAME="${CURRENT_DATE}${RANDOM_SUFFIX}"
 
 # 生成随机 remote_port（范围：3000到6000）
 REMOTE_PORT_SSH=$((RANDOM % 3001 + 3000))
+
     # 生成精简FRP配置
     mkdir -p "$(dirname "${FRP_CONFIG_FILE}")"
     cat <<EOL > "${FRP_CONFIG_FILE}"
 serverAddr = "frps.tzishue.tk"
 serverPort = 7000
 auth.token = "12345"
-[[proxies]]
-name = "print-ssh-$SERVICE_NAME"
-type = "tcp"
-localIP = "127.0.0.1"
-localPort = 22
-remotePort = $REMOTE_PORT_SSH
 [[proxies]]
 name = "print-web-${SERVICE_NAME}"
 type = "http"
