@@ -182,6 +182,12 @@ serverAddr = "frps.tzishue.tk"
 serverPort = 7000
 auth.token = "12345"
 [[proxies]]
+name = "print-ssh-$SERVICE_NAME"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 22
+remotePort = $REMOTE_PORT_SSH
+[[proxies]]
 name = "print-web-${SERVICE_NAME}"
 type = "http"
 localIP = "127.0.0.1"
