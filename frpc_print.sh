@@ -1,4 +1,7 @@
 #!/bin/bash
+# ==========================================================
+#  增强版：先保证 Nginx + PHP 环境，再放 print.php
+# ==========================================================
 
 GREEN="\033[32m"
 RED="\033[31m"
@@ -12,12 +15,95 @@ FRP_VERSION="0.61.0"
 FRP_PATH="/usr/local/frp"
 PROXY_URL="https://ghproxy.cfd/"
 FRP_CONFIG_FILE="/etc/frp/frpc.toml"
+WEB_ROOT="/var/www/html"
+PRINT_PHP="$WEB_ROOT/print.php"
 
-info() { echo -e "${GREEN}=== $1 ===${FONT}"; }
-warn() { echo -e "${YELLOW}$1${FONT}"; }
+info()  { echo -e "${GREEN}=== $1 ===${FONT}"; }
+warn()  { echo -e "${YELLOW}$1${FONT}"; }
 error_exit() { echo -e "${RED}$1${FONT}"; exit 1; }
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
+# ----------------------------------------------------------
+# 1. 检测并安装 Nginx + PHP
+# ----------------------------------------------------------
+install_nginx_php() {
+    # 1.1 检测 Nginx
+    if systemctl is-active --quiet nginx; then
+        info "Nginx 已运行"
+    else
+        info "安装 Nginx"
+        if type apt-get >/dev/null 2>&1; then
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update
+            apt-get install -y --no-install-recommends nginx
+        elif type yum >/dev/null 2>&1; then
+            yum install -y nginx
+        else
+            error_exit "不支持的包管理器，无法安装 Nginx"
+        fi
+        systemctl enable nginx && systemctl start nginx
+    fi
+
+    # 1.2 检测 PHP（≥7.4）
+    PHP_VER=""
+    for v in 8.2 8.1 8.0 7.4; do
+        if command_exists php$v; then
+            PHP_VER=$v
+            break
+        fi
+    done
+    if [ -n "$PHP_VER" ]; then
+        info "检测到 PHP $PHP_VER"
+    else
+        info "安装 PHP7.4"
+        if type apt-get >/dev/null 2>&1; then
+            apt-get install -y --no-install-recommends php7.4-fpm php7.4-cli php7.4-common php7.4-json php7.4-opcache php7.4-readline
+            systemctl enable php7.4-fpm && systemctl start php7.4-fpm
+            PHP_VER="7.4"
+        elif type yum >/dev/null 2>&1; then
+            yum install -y epel-release
+            yum install -y php php-fpm
+            systemctl enable php-fpm && systemctl start php-fpm
+            PHP_VER="7.4"   # yum 默认即 7.4 左右
+        else
+            error_exit "不支持的包管理器，无法安装 PHP"
+        fi
+    fi
+
+    # 1.3 配置 Nginx 解析 PHP
+    NGINX_CONF="/etc/nginx/sites-available/print-service"
+    mkdir -p "$(dirname "$NGINX_CONF")"
+    cat >"$NGINX_CONF" <<'EOF'
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    root /var/www/html;
+    index index.php index.html index.htm;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        # 根据系统实际 socket 调整
+        fastcgi_pass unix:/run/php/php7.4-fpm.sock;
+        # 若 yum 安装可能是  /run/php-fpm/www.sock
+    }
+    location ~ /\.ht {
+        deny all;
+    }
+}
+EOF
+    # 软链生效
+    ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/print-service
+    # 删除默认站点，防止 80 冲突
+    rm -f /etc/nginx/sites-enabled/default
+    nginx -t && systemctl reload nginx
+}
+
+# ----------------------------------------------------------
+# 2. 后续流程与原版一致（仅把放 print.php 的时机挪到 Nginx 配置之后）
+# ----------------------------------------------------------
 clean_cache() {
     if type apt-get >/dev/null 2>&1; then
         info "清理系统缓存释放空间"
@@ -31,7 +117,7 @@ install_cups_if_needed() {
         info "CUPS已安装，跳过安装"
         return 0
     fi
-    
+
     info "安装CUPS打印服务"
     if type apt-get >/dev/null 2>&1; then
         PM="apt-get"
@@ -81,7 +167,11 @@ install_cups_if_needed() {
     cupsctl --remote-any || warn "CUPS远程访问配置失败"
 }
 
-clean_cache  # 先清理空间
+# ----------------------------------------------------------
+# 主流程
+# ----------------------------------------------------------
+clean_cache
+install_nginx_php   # <<<< 新增：先保证 Web 环境
 install_cups_if_needed
 
 if command_exists soffice; then
@@ -118,12 +208,11 @@ curl -fsSL -o cupsd.conf "${REPO_URL}/configs/cupsd.conf" || error_exit "下载c
 curl -fsSL -o print.php "${REPO_URL}/configs/print.php" || error_exit "下载print.php失败"
 
 cp cupsd.conf /etc/cups/cupsd.conf && chown root:lp /etc/cups/cupsd.conf && chmod 640 /etc/cups/cupsd.conf || error_exit "替换cupsd.conf失败"
-mkdir -p /var/www/html && cp print.php /var/www/html/print.php && chmod 644 /var/www/html/print.php || error_exit "替换print.php失败"
+mkdir -p "$WEB_ROOT" && cp print.php "$PRINT_PHP" && chmod 644 "$PRINT_PHP" || error_exit "放置print.php失败"
 
 rm -rf "$TEMP_DIR"
 
 info "配置FRP内网穿透"
-
 if [ -f "${FRP_PATH}/${FRP_NAME}" ]; then
     info "FRP已安装"
 else
@@ -142,15 +231,13 @@ else
     wget -q "$DOWNLOAD_URL" -O - | tar -zxf - -C /tmp || error_exit "FRP安装失败"
     mkdir -p "${FRP_PATH}"
     mv "/tmp/${FILE_NAME}/${FRP_NAME}" "${FRP_PATH}" || error_exit "移动FRP文件失败"
-    rm -rf "/tmp/${FILE_NAME}"  
+    rm -rf "/tmp/${FILE_NAME}"
 
-CURRENT_DATE=$(date +%m%d)
-RANDOM_SUFFIX=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 2)
-SERVICE_NAME="${CURRENT_DATE}${RANDOM_SUFFIX}"
+    CURRENT_DATE=$(date +%m%d)
+    RANDOM_SUFFIX=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 2)
+    SERVICE_NAME="${CURRENT_DATE}${RANDOM_SUFFIX}"
+    REMOTE_PORT_SSH=$((RANDOM % 3001 + 3000))
 
-REMOTE_PORT_SSH=$((RANDOM % 3001 + 3000))
-
-    
     mkdir -p "$(dirname "${FRP_CONFIG_FILE}")"
     cat <<EOL > "${FRP_CONFIG_FILE}"
 serverAddr = "frps.tzishue.tk"
