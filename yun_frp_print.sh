@@ -196,24 +196,29 @@ EOF
     systemctl start "${FRP_NAME}" && systemctl enable "${FRP_NAME}" || error_exit "启动FRP失败"
 }
 
-######################## 活码生成（修正版） ########################
+######################## 活码生成（终极调试版） ########################
 create_live_code() {
     REAL_URL="http://nas-${SERVICE_NAME}.frp.tzishue.tk/print.php"
 
-    # 1. 构造 POST 正文（含全部必填字段）
-    RESP=$(curl -s -X POST \
-         -d "m=add" \
-         -d "type=2" \
-         -d "text=${REAL_URL}" \
-         "http://hm.zyshare.top/hmapi.php?key=comn") || error_exit "活码接口请求失败"
+    # 1. 构造表单数据（完全对齐接口）
+    POST_DATA="m=add&type=2&text=${REAL_URL}"
 
-    # 2. 解析返回
+    # 2. 发送并打印往返内容
+    echo -e "\n---- 发送正文 ----"
+    echo "$POST_DATA"
+    echo -e "---- 返回正文 ----"
+    RESP=$(curl -X POST \
+         -H "Content-Type: application/x-www-form-urlencoded" \
+         -d "$POST_DATA" \
+         "http://hm.zyshare.top/hmapi.php?key=comn")
+    echo "$RESP"
+
+    # 3. 解析
     SHORT_URL=$(echo "$RESP" | jq -r .data 2>/dev/null)
     if [ "$SHORT_URL" = "null" -o -z "$SHORT_URL" ]; then
-        error_exit "活码创建失败：$RESP"
+        error_exit "活码创建失败，见上方返回"
     fi
 
-    # 3. 落盘 + 二维码
     echo "$SHORT_URL" > /root/print_live_code.txt
     info "配置完成"
     echo -e "\n${GREEN}远程打印机活码地址（二维码永久有效）:${FONT}"
