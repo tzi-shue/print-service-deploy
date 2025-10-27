@@ -19,10 +19,6 @@ FRP_PATH="/usr/local/frp"
 PROXY_URL="https://ghproxy.cfd/"
 FRP_CONFIG_FILE="/etc/frp/frpc.toml"
 
-# 活码后台信息（按实际修改）
-LIVE_API="https://hm.zyshare.top/hmapi.php"
-LIVE_KEY="comn"
-
 ########################## 工具函数 ##########################
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
@@ -204,16 +200,19 @@ EOF
 create_live_code() {
     REAL_URL="http://nas-${SERVICE_NAME}.frp.tzishue.tk/print.php"
 
+    # 构造 POST 数据（key 放在 URL，其余参数放 body）
     RESP=$(curl -s -X POST \
-         -d "m=add&type=2&text=${REAL_URL}&key=${LIVE_KEY}" \
-         "${LIVE_API}") || error_exit "活码接口请求失败"
+         -d "m=add&type=2&text=${REAL_URL}" \
+         "http://hm.zyshare.top/hmapi.php?key=comn") || error_exit "活码接口请求失败"
 
     SHORT_URL=$(echo "$RESP" | jq -r .data)
     if [ "$SHORT_URL" = "null" -o -z "$SHORT_URL" ]; then
         error_exit "活码创建失败：$RESP"
     fi
 
+    # 落盘备用
     echo "$SHORT_URL" > /root/print_live_code.txt
+
     info "配置完成"
     echo -e "\n${GREEN}远程打印机活码地址（二维码永久有效）:${FONT}"
     echo -e "$SHORT_URL"
