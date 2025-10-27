@@ -4,10 +4,16 @@
 
 ## 快速开始
 
-### 方法一：直接运行
+### 方法一：直接运行（无nginx环境）
 ```bash
 sudo bash -c "$(curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/frp_print.sh)"
 ```
+
+### 方法一：直接运行（nginx环境）
+```bash
+sudo bash -c "$(curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/n_frp_print.sh)"
+```
+
 
 ### 方法二：直接运行
 # 1. 下载脚本到本地
@@ -33,6 +39,7 @@ sudo ./frp_print.sh
 ```bash
 sudo bash -c "$(curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/copy_print.sh)"
 ```
+
 
 
 
