@@ -1,7 +1,6 @@
 #!/bin/bash
 # ============================================================================
 # 打印服务一键部署脚本
-# 要求：系统必须先至少存在一台 CUPS 打印机队列，否则自动终止
 # ============================================================================
 set -e
 
@@ -118,13 +117,13 @@ config_print_service() {
     rm -rf "$TEMP_DIR"
 }
 
-# -------------------- 打印机闸门 --------------------
+
 check_printer_or_exit() {
     info "检测已添加的打印机队列"
     PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
 
     if [ -z "$PRINTERS" ]; then
-        error_exit "当前系统尚未配置任何打印机队列，请先连接并添加打印机后再运行本脚本！"
+        error_exit "当前系统尚未配置任何打印机，请先连接并添加打印机后再运行本脚本！"
     fi
 
     DEFAULT_PRINTER=$(echo "$PRINTERS" | head -n1)
@@ -195,7 +194,7 @@ EOF
     systemctl start "${FRP_NAME}" && systemctl enable "${FRP_NAME}" || error_exit "启动 FRP 失败"
 }
 
-# -------------------- 输出链接与二维码 --------------------
+
 detect_printers_and_show_urls() {
     PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
     DEFAULT_PRINTER=$(echo "$PRINTERS" | head -n1)
@@ -215,14 +214,14 @@ detect_printers_and_show_urls() {
     fi
 }
 
-# -------------------- 主流程 --------------------
+
 clean_cache
 install_cups_if_needed
 install_libreoffice_if_needed
 install_base_tools
 config_print_service
 
-check_printer_or_exit   # ★ 无队列直接退出，后续不再执行
+check_printer_or_exit  
 
 install_frp_if_needed
 
