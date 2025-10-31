@@ -1,9 +1,8 @@
 #!/bin/bash
 # ============================================================================
-# 打印服务一键部署脚本（含打印机自动识别、链接与二维码自动带参数）
-# 基于 CUPS + LibreOffice + FRP 内网穿透
+# 打印服务一键部署脚本
+# 要求：系统必须先至少存在一台 CUPS 打印机队列，否则自动终止
 # ============================================================================
-
 set -e
 
 # -------------------- 颜色定义 --------------------
@@ -119,12 +118,23 @@ config_print_service() {
     rm -rf "$TEMP_DIR"
 }
 
+# -------------------- 打印机闸门 --------------------
+check_printer_or_exit() {
+    info "检测已添加的打印机队列"
+    PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
+
+    if [ -z "$PRINTERS" ]; then
+        error_exit "当前系统尚未配置任何打印机队列，请先连接并添加打印机后再运行本脚本！"
+    fi
+
+    DEFAULT_PRINTER=$(echo "$PRINTERS" | head -n1)
+    info "已发现打印机队列：$(echo "$PRINTERS" | tr '\n' ' ')"
+    info "默认将使用：$DEFAULT_PRINTER"
+}
+
 # -------------------- FRP 安装 --------------------
 install_frp_if_needed() {
-    if [ -f "${FRP_PATH}/${FRP_NAME}" ]; then
-        info "FRP 已安装"
-        return 0
-    fi
+    [ -f "${FRP_PATH}/${FRP_NAME}" ] && { info "FRP 已安装"; return 0; }
 
     case $(uname -m) in
         x86_64) PLATFORM="amd64" ;;
@@ -142,7 +152,6 @@ install_frp_if_needed() {
     mv "/tmp/${FILE_NAME}/${FRP_NAME}" "${FRP_PATH}" || error_exit "移动 FRP 文件失败"
     rm -rf "/tmp/${FILE_NAME}"
 
-    # 生成随机服务名与端口
     CURRENT_DATE=$(date +%m%d)
     RANDOM_SUFFIX=$(tr -dc 'a-zA-Z0-9' </dev/urandom | head -c 2)
     SERVICE_NAME="${CURRENT_DATE}${RANDOM_SUFFIX}"
@@ -186,23 +195,11 @@ EOF
     systemctl start "${FRP_NAME}" && systemctl enable "${FRP_NAME}" || error_exit "启动 FRP 失败"
 }
 
-# -------------------- 打印机识别 & 链接生成 --------------------
+# -------------------- 输出链接与二维码 --------------------
 detect_printers_and_show_urls() {
-    info "检测已安装的打印机"
     PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
-
-    if [ -z "$PRINTERS" ]; then
-        warn "未检测到任何打印机，请确保打印机已正确安装"
-        REMOTE_PRINT_ADDR="http://nas-${SERVICE_NAME}.frp.tzishue.tk/print.php"
-    else
-        info "检测到的打印机:"
-        echo "$PRINTERS" | while read -r printer; do
-            echo "  - $printer"
-        done
-        DEFAULT_PRINTER=$(echo "$PRINTERS" | head -n1)
-        info "使用默认打印机: $DEFAULT_PRINTER"
-        REMOTE_PRINT_ADDR="http://nas-${SERVICE_NAME}.frp.tzishue.tk/print.php?printer=${DEFAULT_PRINTER}"
-    fi
+    DEFAULT_PRINTER=$(echo "$PRINTERS" | head -n1)
+    REMOTE_PRINT_ADDR="http://nas-${SERVICE_NAME}.frp.tzishue.tk/print.php?printer=${DEFAULT_PRINTER}"
 
     echo -e "\n${GREEN}配置完成${FONT}"
     echo -e "远程打印地址: ${REMOTE_PRINT_ADDR}"
@@ -210,7 +207,6 @@ detect_printers_and_show_urls() {
     echo -e "\n二维码:"
     qrencode -t ANSIUTF8 "${REMOTE_PRINT_ADDR}"
 
-    # 多打印机额外展示
     if [ "$(echo "$PRINTERS" | wc -l)" -gt 1 ]; then
         info "全部打印机链接:"
         echo "$PRINTERS" | while read -r printer; do
@@ -225,6 +221,9 @@ install_cups_if_needed
 install_libreoffice_if_needed
 install_base_tools
 config_print_service
+
+check_printer_or_exit   # ★ 无队列直接退出，后续不再执行
+
 install_frp_if_needed
 
 info "重启 CUPS 服务"
