@@ -12,8 +12,8 @@ REPO_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-s
 FRP_NAME="frpc"; FRP_VERSION="0.61.0"; FRP_PATH="/usr/local/frp"
 PROXY_URL="https://ghproxy.cfd/"
 FRP_CONFIG_FILE="/etc/frp/frpc.toml"
-SELF_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/all_print.sh"
-TARGET="/usr/local/sbin/all_print.sh"
+SELF_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/print-tool.sh"
+TARGET="/usr/local/sbin/print-tool.sh"
 PRINT_CMD="/usr/local/bin/printurl"
 
 # -------------------- 工具函数 --------------------
@@ -30,13 +30,18 @@ cmdx()  { command -v "$1" >/dev/null 2>&1; }
     exec "$TARGET" "$@"
 }
 
-# ------ 轻量读取模式 ------
+# ------ 轻量读取模式（核心修改：仅保留必要逻辑）------
 print_qr() {
-    [ -f "$FRP_CONFIG_FILE" ] || { warn "未找到 FRP 配置：$FRP_CONFIG_FILE"; exit 1; }
+    # 直接读取FRP配置中的subdomain，不额外检查
     SUB_DOMAIN=$(grep -oP 'subdomain\s*=\s*"\K[^"]+' "$FRP_CONFIG_FILE" | head -n1)
-    [ -z "$SUB_DOMAIN" ] && { warn "解析 subdomain 失败"; exit 1; }
+    # 直接获取打印机列表，不额外检查
     PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
-    [ -z "$PRINTERS" ] && { warn "当前系统没有任何打印机"; exit 0; }
+    
+    # 仅在关键信息缺失时提示，无多余操作
+    [ -z "$SUB_DOMAIN" ] && warn "解析 subdomain 失败" && exit 1
+    [ -z "$PRINTERS" ] && warn "当前系统没有任何打印机" && exit 0
+    
+    # 直接拼接链接并输出
     echo -e "${GREEN}远程打印链接：${FONT}"
     for pr in $PRINTERS; do
         URL="http://${SUB_DOMAIN}.frp.tzishue.tk/print.php?printer=${pr}"
