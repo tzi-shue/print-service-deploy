@@ -98,6 +98,7 @@ set -x
     chmod 644 /var/www/html/print.php
     cd /
     rm -rf "$temp"
+systemctl restart cups 2>/dev/null || service cups restart || true
 set +x
 }
 
