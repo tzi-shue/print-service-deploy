@@ -1,6 +1,7 @@
 #!/bin/bash
 
-#################### 通用工具 ####################
+
+############### 通用工具 ###############
 color(){
     local c="$1" s="$2"; shift 2
     case "$c" in
@@ -14,21 +15,16 @@ warn(){ color y "$*"; }
 error_exit(){ color r "$*" "有问题联系开发者 VX:nmydzf"; exit 1; }
 cmd(){ command -v "$1" >/dev/null 2>&1; }
 
-#################### 自动换源 ####################
+############### 自动换源 ###############
 fix_apt_sources(){
-    # Debian 旧版
-    if grep -qi 'debian.*stretch\|jessie\|wheezy' /etc/os-release 2>/dev/null; then
+    grep -qi 'debian.*stretch\|jessie\|wheezy' /etc/os-release 2>/dev/null && \
         sed -i 's|http://deb.debian.org|http://archive.debian.org|g;
                 s|http://security.debian.org|http://archive.debian.org|g' /etc/apt/sources.list
-        echo "deb http://archive.debian.org/debian stretch-backports main" >> /etc/apt/sources.list
-    fi
-    # Ubuntu 旧版
-    if grep -qi 'ubuntu.*1[0-6]\.' /etc/os-release 2>/dev/null; then
+    grep -qi 'ubuntu.*1[0-6]\.' /etc/os-release 2>/dev/null && \
         sed -i 's|http://.*.ubuntu.com|http://old-releases.ubuntu.com|g' /etc/apt/sources.list
-    fi
 }
 
-#################### 包管理器统一封装 ####################
+############### 包管理器统一封装 ###############
 pkg_update(){
     if cmd apt-get; then
         fix_apt_sources
@@ -47,7 +43,7 @@ pkg_install(){
     fi
 }
 
-#################### 缓存清理（不退出） ####################
+############### 缓存清理（不退出） ###############
 clean_cache(){
     if cmd apt-get; then
         info "清理系统缓存"
@@ -56,7 +52,7 @@ clean_cache(){
     fi
 }
 
-#################### CUPS ####################
+############### CUPS ###############
 install_cups(){
     if cmd cupsd || systemctl is-active --quiet cups 2>/dev/null; then
         info "CUPS 已安装"
@@ -69,40 +65,36 @@ install_cups(){
     cupsctl --remote-any >/dev/null 2>&1 || true
 }
 
-#################### LibreOffice ####################
+############### LibreOffice ###############
 install_lo(){
     cmd soffice && return 0
     info "安装 LibreOffice"
     pkg_install libreoffice-core libreoffice-writer libreoffice-calc
 }
 
-#################### 基础工具 ####################
+############### 基础工具 ###############
 install_tools(){
     info "安装基础工具"
     pkg_install wget curl qrencode
 }
 
-#################### 打印服务配置 ####################
+############### 打印服务配置（含重启） ###############
 config_print(){
-set -x
     info "配置打印服务"
     temp=$(mktemp -d) || exit 1
     cd "$temp"
-    curl -fsSL -o cupsd.conf "${REPO_URL}/configs/cupsd.conf" || exit 1
-    curl -fsSL -o print.php "${REPO_URL}/configs/print.php"   || exit 1
+    curl -fsSL -o cupsd.conf "${REPO_URL}/configs/cupsd.conf" || error_exit "下载 cupsd.conf 失败"
+    curl -fsSL -o print.php   "${REPO_URL}/configs/print.php"   || error_exit "下载 print.php 失败"
     mkdir -p /etc/cups /var/www/html
     cp cupsd.conf /etc/cups/cupsd.conf
-    chown root:lp /etc/cups/cupsd.conf
-    chmod 640 /etc/cups/cupsd.conf
-    cp print.php /var/www/html/print.php
-    chmod 644 /var/www/html/print.php
-    cd /
-    rm -rf "$temp"
-systemctl restart cups 2>/dev/null || service cups restart || true
-set +x
+    chown root:lp /etc/cups/cupsd.conf && chmod 640 /etc/cups/cupsd.conf
+    cp print.php /var/www/html/print.php && chmod 644 /var/www/html/print.php
+    cd / && rm -rf "$temp"
+    # ******** 关键：让新配置生效 ********
+    systemctl restart cups 2>/dev/null || service cups restart || true
 }
 
-#################### 打印机检测 ####################
+############### 打印机检测 ###############
 check_printer(){
     PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
     [ -z "$PRINTERS" ] && error_exit "系统未添加任何打印机，请先连接并添加打印机"
@@ -111,7 +103,7 @@ check_printer(){
     info "默认使用：$DEFAULT"
 }
 
-#################### FRP ####################
+############### FRP ###############
 install_frp(){
     [ -f "${FRP_PATH}/${FRP_NAME}" ] && return 0
     case $(uname -m) in
@@ -174,26 +166,17 @@ EOF
 ### BEGIN INIT INFO
 # Provides:          frpc
 # Required-Start:    \$network
-# Required-Stop:
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
 # Short-Description: Start frpc at boot
 ### END INIT INFO
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
-DESC="Frp Client"
-NAME=frpc
-DAEMON=${FRP_PATH}/\${NAME}
+DAEMON=${FRP_PATH}/${FRP_NAME}
 DAEMON_ARGS="-c ${FRP_CONFIG_FILE}"
-PIDFILE=/var/run/\${NAME}.pid
-
+PIDFILE=/var/run/${FRP_NAME}.pid
 . /lib/lsb/init-functions
-
-do_start(){
-    start-stop-daemon --start --quiet --background --make-pidfile --pidfile \$PIDFILE --exec \$DAEMON -- \$DAEMON_ARGS
-}
-do_stop(){
-    start-stop-daemon --stop --quiet --pidfile \$PIDFILE
-}
+do_start(){ start-stop-daemon --start --quiet --background --make-pidfile --pidfile \$PIDFILE --exec \$DAEMON -- \$DAEMON_ARGS; }
+do_stop(){ start-stop-daemon --stop --quiet --pidfile \$PIDFILE; }
 case "\$1" in
   start)   do_start ;;
   stop)    do_stop ;;
@@ -207,7 +190,7 @@ EOF
     fi
 }
 
-#################### 输出二维码 ####################
+############### 输出二维码 ###############
 show_url(){
     PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
     DEFAULT=$(echo "$PRINTERS" | head -n1)
@@ -223,7 +206,7 @@ show_url(){
     fi
 }
 
-#################### 主流程 ####################
+############### 主流程 ###############
 REPO_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main"
 FRP_NAME="frpc"
 FRP_VERSION="0.61.0"
@@ -235,18 +218,11 @@ clean_cache
 install_cups
 install_lo
 install_tools
-config_print
+config_print      # 已自动重启 CUPS
 check_printer
 install_frp
 
-# 重启 CUPS（systemd/sysv 都支持）
-if cmd systemctl; then
-    systemctl restart cups || true
-else
-    service cups restart || true
-fi
-
-show_url
 info "常用命令："
 echo "  重启 FRP：systemctl restart ${FRP_NAME} 或 service ${FRP_NAME} restart"
 echo "  重启 CUPS：systemctl restart cups 或 service cups restart"
+echo -e "\033[32m有问题联系开发者 VX:nmydzf\033[0m"
