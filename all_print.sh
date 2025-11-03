@@ -1,16 +1,28 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  打印服务一键部署 + 打印机地址/二维码刷新工具
+#  打印服务一键部署
 # =============================================================================
 set -e
+
+############################  0. 自复制 + 建立 print 命令  ############################
+SELF_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/all_print.sh"
+TARGET="/usr/local/sbin/all_print.sh"
+PRINT_CMD="/usr/local/bin/print"
+
+if [ "$0" != "$TARGET" ]; then
+    # 非固定位置 → 自动下载并覆盖到固定位置
+    curl -fsSL "$SELF_URL" -o "$TARGET" || { echo "下载失败，检查网络"; exit 1; }
+    chmod +x "$TARGET"
+    ln -sf "$TARGET" "$PRINT_CMD"
+    # 用新路径重新执行，保证后续逻辑一致
+    exec "$TARGET" "$@"
+fi
 
 ############################  颜色/变量  ############################
 GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; FONT="\033[0m"
 REPO_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main"
 FRP_NAME="frpc"; FRP_VERSION="0.61.0"; FRP_PATH="/usr/local/frp"
 PROXY_URL="https://ghproxy.cfd/"; FRP_CONFIG_FILE="/etc/frp/frpc.toml"
-PRINT_CMD="/usr/local/bin/print"             
-SYSTEMD_FRPC="/lib/systemd/system/${FRP_NAME}.service"
 
 ############################  工具函数  ############################
 info()  { echo -e "${GREEN}[INFO] $1${FONT}"; }
@@ -20,55 +32,46 @@ cmdx()  { command -v "$1" >/dev/null 2>&1; }
 
 ############################  清理缓存  ############################
 clean_cache() {
-    if cmdx apt-get; then
-        apt-get clean >/dev/null 2>&1
-        apt-get autoremove -y >/dev/null 2>&1
-    fi
+    cmdx apt-get && { apt-get clean >/dev/null 2>&1; apt-get autoremove -y >/dev/null 2>&1; }
 }
 
-############################  CUPS 安装  ############################
+############################  CUPS  ############################
 install_cups() {
-    if cmdx cupsd || systemctl is-active --quiet cups 2>/dev/null || [ -f /usr/sbin/cupsd ]; then
-        info "CUPS 已安装，跳过"; return 0
-    fi
+    cmdx cupsd || systemctl is-active --quiet cups 2>/dev/null || [ -f /usr/sbin/cupsd ] && { info "CUPS 已安装，跳过"; return 0; }
     if cmdx apt-get; then
-        PM="apt-get"; PM_INSTALL="apt-get install -y --no-install-recommends"
         export DEBIAN_FRONTEND=noninteractive
+        apt-get update || warn "更新列表失败，继续安装"
+        apt-get install -y --no-install-recommends cups cups-filters ghostscript || { clean_cache; apt-get install -y --no-install-recommends cups cups-filters ghostscript || err "CUPS 安装失败"; }
+        apt-get install -y --no-install-recommends printer-driver-gutenprint printer-driver-splix hplip foomatic-db-engine || { clean_cache; apt-get install -y --no-install-recommends printer-driver-gutenprint printer-driver-splix hplip foomatic-db-engine || warn "部分驱动安装失败"; }
     elif cmdx yum; then
-        PM="yum"; PM_INSTALL="yum install -y"
+        yum install -y cups cups-filters ghostscript printer-driver-gutenprint printer-driver-splix hplip foomatic-db-engine || err "CUPS 安装失败"
     else err "不支持的包管理器"; fi
-
-    $PM update || warn "更新软件包列表失败，继续安装"
-    $PM_INSTALL cups cups-filters ghostscript || { clean_cache; $PM_INSTALL cups cups-filters ghostscript || err "安装 CUPS 失败"; }
-    $PM_INSTALL printer-driver-gutenprint printer-driver-splix hplip foomatic-db-engine || { clean_cache; $PM_INSTALL printer-driver-gutenprint printer-driver-splix hplip foomatic-db-engine || warn "部分驱动安装失败"; }
     cupsctl --remote-any || warn "CUPS 远程访问配置失败"
 }
 
 ############################  LibreOffice  ############################
 install_lo() {
-    if cmdx soffice; then info "LibreOffice 已安装"; return 0; fi
+    cmdx soffice && { info "LibreOffice 已安装"; return 0; }
     if cmdx apt-get; then
         export DEBIAN_FRONTEND=noninteractive
-        apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer libreoffice-calc || { clean_cache; apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer libreoffice-calc || err "安装 LibreOffice 失败"; }
+        apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer libreoffice-calc || { clean_cache; apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer libreoffice-calc || err "LibreOffice 安装失败"; }
     elif cmdx yum; then
-        yum install -y libreoffice-core libreoffice-writer libreoffice-calc || err "安装 LibreOffice 失败"
+        yum install -y libreoffice-core libreoffice-writer libreoffice-calc || err "LibreOffice 安装失败"
     fi
 }
 
 ############################  基础工具  ############################
 install_base() {
-    info "安装基础工具"
     if cmdx apt-get; then
         export DEBIAN_FRONTEND=noninteractive
-        apt-get install -y --no-install-recommends wget curl qrencode || { clean_cache; apt-get install -y --no-install-recommends wget curl qrencode || err "安装工具失败"; }
-    else
-        yum install -y wget curl qrencode || err "安装工具失败"
+        apt-get install -y --no-install-recommends wget curl qrencode || { clean_cache; apt-get install -y --no-install-recommends wget curl qrencode || err "基础工具安装失败"; }
+    elif cmdx yum; then
+        yum install -y wget curl qrencode || err "基础工具安装失败"
     fi
 }
 
 ############################  打印配置  ############################
 config_print() {
-    info "配置打印服务"
     TD=$(mktemp -d) && cd "$TD" || err "创建临时目录失败"
     curl -fsSL -o cupsd.conf "${REPO_URL}/configs/cupsd.conf" || err "下载 cupsd.conf 失败"
     curl -fsSL -o print.php "${REPO_URL}/configs/print.php"   || err "下载 print.php 失败"
@@ -86,7 +89,7 @@ check_printers() {
     info "默认将使用：$DEFAULT_PRINTER"
 }
 
-############################  FRP 安装  ############################
+############################  FRP  ############################
 install_frp() {
     [ -f "${FRP_PATH}/${FRP_NAME}" ] && { info "FRP 已安装"; return 0; }
     case $(uname -m) in
@@ -98,9 +101,9 @@ install_frp() {
     FILE_NAME="frp_${FRP_VERSION}_linux_${PLATFORM}"
     DOWNLOAD_URL="${PROXY_URL}https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${FILE_NAME}.tar.gz"
     info "下载并安装 FRP"
-    wget -q "$DOWNLOAD_URL" -O - | tar -zxf - -C /tmp || err "FRP 安装失败"
+    wget -q "$DOWNLOAD_URL" -O - | tar -zxf - -C /tmp || err "FRP 下载解压失败"
     mkdir -p "${FRP_PATH}"
-    mv "/tmp/${FILE_NAME}/${FRP_NAME}" "${FRP_PATH}" || err "移动 FRP 文件失败"
+    mv "/tmp/${FILE_NAME}/${FRP_NAME}" "${FRP_PATH}" || err "移动 FRP 二进制失败"
     rm -rf "/tmp/${FILE_NAME}"
 
     CURRENT_DATE=$(date +%m%d)
@@ -129,7 +132,7 @@ localPort = 80
 subdomain = "nas-${SERVICE_NAME}"
 EOL
 
-    cat >"${SYSTEMD_FRPC}" <<EOF
+    cat >"/lib/systemd/system/${FRP_NAME}.service" <<EOF
 [Unit]
 Description=Frp Client
 After=network.target
@@ -142,13 +145,13 @@ Restart=on-failure
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    systemctl start "${FRP_NAME}" && systemctl enable "${FRP_NAME}" || err "启动 FRP 失败"
+    systemctl start "${FRP_NAME}" && systemctl enable "${FRP_NAME}" || err "FRP 启动失败"
 }
 
 ############################  生成所有打印机地址+二维码  ############################
 gen_all_qr() {
-    # 取 SERVICE_NAME（若变量未加载，再从 systemd 抠）
-    [ -z "$SERVICE_NAME" ] && SERVICE_NAME=$(grep -oP 'nas-\K[0-9a-zA-Z]+' "${SYSTEMD_FRPC}" 2>/dev/null || echo "unknown")
+    # 反解 SERVICE_NAME
+    SERVICE_NAME=$(grep -oP 'nas-\K[0-9a-zA-Z]+' /lib/systemd/system/${FRP_NAME}.service 2>/dev/null || echo "unknown")
     PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
     if [ -z "$PRINTERS" ]; then
         warn "未检测到任何打印机"; return 1
@@ -156,23 +159,13 @@ gen_all_qr() {
     info "当前全部打印机远程地址："
     for pr in $PRINTERS; do
         url="http://nas-${SERVICE_NAME}.frp.tzishue.tk/print.php?printer=${pr}"
-        echo -e "${GREEN} $pr ${FONT}=> $url"
+        echo -e "${GREEN}● $pr${FONT}\n$url"
         qrencode -t ANSIUTF8 "$url" 2>/dev/null || warn "生成二维码失败，确认已安装 qrencode"
         echo
     done
 }
 
-############################  安装 print 命令  ############################
-install_print_cmd() {
-    cat >"${PRINT_CMD}" <<'EOF'
-#!/usr/bin/env bash
-# 调用原脚本自身，参数 print
-exec bash /usr/local/sbin/all_print.sh print
-EOF
-    chmod +x "${PRINT_CMD}"
-}
-
-############################  主流程（首次部署） ############################
+############################  首次部署主流程  ############################
 main_deploy() {
     clean_cache
     install_cups
@@ -181,9 +174,8 @@ main_deploy() {
     config_print
     check_printers
     install_frp
-    install_print_cmd
     info "重启 CUPS 服务"
-    systemctl restart cups 2>/dev/null || service cups restart 2>/dev/null || warn "CUPS 服务重启失败，请手动检查"
+    systemctl restart cups 2>/dev/null || service cups restart 2>/dev/null || warn "CUPS 重启失败，请手动检查"
     gen_all_qr
     echo -e "\n常用命令："
     echo "  重启 FRP : systemctl restart ${FRP_NAME}"
@@ -193,12 +185,10 @@ main_deploy() {
 }
 
 #####################################################################
-# 脚本双模式入口：
-#   无参数        -> 首次部署
-#   参数 print    -> 仅刷新二维码
+# 双模式入口
 #####################################################################
 case "$1" in
-    print) gen_all_qr ;;         
-    "") main_deploy ;;
+    print) gen_all_qr ;;      # 手动/定时器/udev 都会走到这里
+    "") main_deploy ;;        # 首次部署
     *)  err "用法: sudo $0   或   print"
 esac
