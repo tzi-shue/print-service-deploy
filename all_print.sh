@@ -182,10 +182,15 @@ main_deploy() {
 }
 
 #####################################################################
-# 双模式入口
+# 双模式入口（修复：printurl 直接轻量查询）
 #####################################################################
-case "$1" in
-    print) print_qr ;;      # 即时查询（只读）
-    "") main_deploy ;;      # 首次部署（完整）
-    *)  err "用法: sudo $0   或   printurl"
-esac
+# 若命令是 printurl，直接触发轻量查询，跳过所有部署流程
+if [ "$(basename "$0")" = "printurl" ]; then
+    print_qr
+else
+    case "$1" in
+        print) print_qr ;;      # 即时查询（只读）
+        "") main_deploy ;;      # 首次部署（完整）
+        *)  err "用法: sudo $0   或   printurl"
+    esac
+fi
