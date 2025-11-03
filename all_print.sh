@@ -1,109 +1,111 @@
-#!/usr/bin/env bash
-# =============================================================================
-#  打印服务一键部署
-# =============================================================================
+#!/bin/bash
+# ============================================================================
+# 打印服务一键部署脚本  (内置 print 命令)
+# ============================================================================
 set -e
 
-############################  0. 自复制 + 建立 print 命令  ############################
-SELF_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/all_print.sh"
-TARGET="/usr/local/sbin/all_print.sh"
-PRINT_CMD="/usr/local/bin/print"
-
-if [ "$0" != "$TARGET" ]; then
-    # 非固定位置 → 自动下载并覆盖到固定位置
-    curl -fsSL "$SELF_URL" -o "$TARGET" || { echo "下载失败，检查网络"; exit 1; }
-    chmod +x "$TARGET"
-    ln -sf "$TARGET" "$PRINT_CMD"
-    # 用新路径重新执行，保证后续逻辑一致
-    exec "$TARGET" "$@"
-fi
-
-############################  颜色/变量  ############################
+# -------------------- 颜色定义 --------------------
 GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; FONT="\033[0m"
+
+# -------------------- 变量默认值 --------------------
 REPO_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main"
 FRP_NAME="frpc"; FRP_VERSION="0.61.0"; FRP_PATH="/usr/local/frp"
-PROXY_URL="https://ghproxy.cfd/"; FRP_CONFIG_FILE="/etc/frp/frpc.toml"
+PROXY_URL="https://ghproxy.cfd/"
+FRP_CONFIG_FILE="/etc/frp/frpc.toml"
+PRINT_CMD="/usr/local/bin/print"          # 快捷命令路径
 
-############################  工具函数  ############################
-info()  { echo -e "${GREEN}[INFO] $1${FONT}"; }
-warn()  { echo -e "${YELLOW}[WARN] $1${FONT}"; }
-err()   { echo -e "${RED}[ERROR] $1${FONT}"; echo -e "${RED}有问题联系开发者 VX:nmydzf${FONT}"; exit 1; }
-cmdx()  { command -v "$1" >/dev/null 2>&1; }
+# -------------------- 工具函数 --------------------
+info()  { echo -e "${GREEN}=== $1 ===${FONT}"; }
+warn()  { echo -e "${YELLOW}$1${FONT}"; }
+error_exit() { echo -e "${RED}$1${FONT}"; echo -e "${RED}有问题联系开发者 VX:nmydzf${FONT}"; exit 1; }
+command_exists() { command -v "$1" >/dev/null 2>&1; }
 
-############################  清理缓存  ############################
+# -------------------- 缓存清理 --------------------
 clean_cache() {
-    cmdx apt-get && { apt-get clean >/dev/null 2>&1; apt-get autoremove -y >/dev/null 2>&1; }
+    if type apt-get >/dev/null 2>&1; then
+        apt-get clean >/dev/null 2>&1
+        apt-get autoremove -y >/dev/null 2>&1
+    fi
 }
 
-############################  CUPS  ############################
-install_cups() {
-    cmdx cupsd || systemctl is-active --quiet cups 2>/dev/null || [ -f /usr/sbin/cupsd ] && { info "CUPS 已安装，跳过"; return 0; }
-    if cmdx apt-get; then
+# -------------------- CUPS 安装 --------------------
+install_cups_if_needed() {
+    if command_exists cupsd || systemctl is-active --quiet cups 2>/dev/null || [ -f /usr/sbin/cupsd ]; then
+        info "CUPS 已安装，跳过安装"; return 0
+    fi
+    info "安装 CUPS 打印服务"
+    if type apt-get >/dev/null 2>&1; then
+        PM="apt-get"; PM_INSTALL="apt-get install -y --no-install-recommends"
         export DEBIAN_FRONTEND=noninteractive
-        apt-get update || warn "更新列表失败，继续安装"
-        apt-get install -y --no-install-recommends cups cups-filters ghostscript || { clean_cache; apt-get install -y --no-install-recommends cups cups-filters ghostscript || err "CUPS 安装失败"; }
-        apt-get install -y --no-install-recommends printer-driver-gutenprint printer-driver-splix hplip foomatic-db-engine || { clean_cache; apt-get install -y --no-install-recommends printer-driver-gutenprint printer-driver-splix hplip foomatic-db-engine || warn "部分驱动安装失败"; }
-    elif cmdx yum; then
-        yum install -y cups cups-filters ghostscript printer-driver-gutenprint printer-driver-splix hplip foomatic-db-engine || err "CUPS 安装失败"
-    else err "不支持的包管理器"; fi
+    elif type yum >/dev/null 2>&1; then
+        PM="yum"; PM_INSTALL="yum install -y"
+    else error_exit "不支持的包管理器"; fi
+
+    $PM update || warn "更新软件包列表失败，继续安装"
+    $PM_INSTALL cups cups-filters ghostscript || { clean_cache; $PM_INSTALL cups cups-filters ghostscript || error_exit "安装 CUPS 失败"; }
+    $PM_INSTALL printer-driver-gutenprint printer-driver-splix hplip foomatic-db-engine || { clean_cache; $PM_INSTALL printer-driver-gutenprint printer-driver-splix hplip foomatic-db-engine || warn "部分驱动安装失败"; }
     cupsctl --remote-any || warn "CUPS 远程访问配置失败"
 }
 
-############################  LibreOffice  ############################
-install_lo() {
-    cmdx soffice && { info "LibreOffice 已安装"; return 0; }
-    if cmdx apt-get; then
+# -------------------- LibreOffice 安装 --------------------
+install_libreoffice_if_needed() {
+    if command_exists soffice; then info "LibreOffice 已安装"; return 0; fi
+    info "安装 LibreOffice"
+    if type apt-get >/dev/null 2>&1; then
         export DEBIAN_FRONTEND=noninteractive
-        apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer libreoffice-calc || { clean_cache; apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer libreoffice-calc || err "LibreOffice 安装失败"; }
-    elif cmdx yum; then
-        yum install -y libreoffice-core libreoffice-writer libreoffice-calc || err "LibreOffice 安装失败"
+        apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer libreoffice-calc || { clean_cache; apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer libreoffice-calc || error_exit "安装 LibreOffice 失败"; }
+    elif type yum >/dev/null 2>&1; then
+        yum install -y libreoffice-core libreoffice-writer libreoffice-calc || error_exit "安装 LibreOffice 失败"
     fi
 }
 
-############################  基础工具  ############################
-install_base() {
-    if cmdx apt-get; then
+# -------------------- 基础工具安装 --------------------
+install_base_tools() {
+    info "安装基础工具"
+    if type apt-get >/dev/null 2>&1; then
         export DEBIAN_FRONTEND=noninteractive
-        apt-get install -y --no-install-recommends wget curl qrencode || { clean_cache; apt-get install -y --no-install-recommends wget curl qrencode || err "基础工具安装失败"; }
-    elif cmdx yum; then
-        yum install -y wget curl qrencode || err "基础工具安装失败"
-    fi
+        apt-get install -y --no-install-recommends wget curl qrencode || { clean_cache; apt-get install -y --no-install-recommends wget curl qrencode || error_exit "安装工具失败"; }
+    else yum install -y wget curl qrencode || error_exit "安装工具失败"; fi
 }
 
-############################  打印配置  ############################
-config_print() {
-    TD=$(mktemp -d) && cd "$TD" || err "创建临时目录失败"
-    curl -fsSL -o cupsd.conf "${REPO_URL}/configs/cupsd.conf" || err "下载 cupsd.conf 失败"
-    curl -fsSL -o print.php "${REPO_URL}/configs/print.php"   || err "下载 print.php 失败"
-    cp cupsd.conf /etc/cups/cupsd.conf && chown root:lp /etc/cups/cupsd.conf && chmod 640 /etc/cups/cupsd.conf || err "替换 cupsd.conf 失败"
-    mkdir -p /var/www/html && cp print.php /var/www/html/print.php && chmod 644 /var/www/html/print.php || err "部署 print.php 失败"
-    rm -rf "$TD"
+# -------------------- 打印服务配置 --------------------
+config_print_service() {
+    info "配置打印服务"
+    TEMP_DIR=$(mktemp -d) || error_exit "创建临时目录失败"
+    cd "$TEMP_DIR" || error_exit "进入临时目录失败"
+    curl -fsSL -o cupsd.conf "${REPO_URL}/configs/cupsd.conf" || error_exit "下载 cupsd.conf 失败"
+    curl -fsSL -o print.php "${REPO_URL}/configs/print.php"   || error_exit "下载 print.php 失败"
+    cp cupsd.conf /etc/cups/cupsd.conf && chown root:lp /etc/cups/cupsd.conf && chmod 640 /etc/cups/cupsd.conf || error_exit "替换 cupsd.conf 失败"
+    mkdir -p /var/www/html && cp print.php /var/www/html/print.php && chmod 644 /var/www/html/print.php || error_exit "部署 print.php 失败"
+    rm -rf "$TEMP_DIR"
 }
 
-############################  检测打印机  ############################
-check_printers() {
+# -------------------- 检测打印机 --------------------
+check_printer_or_exit() {
+    info "检测已添加的打印机队列"
     PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
-    [ -z "$PRINTERS" ] && err "当前系统尚未配置任何打印机，请先连接并添加打印机后再运行本脚本！有问题联系开发者 VX:nmydzf"
+    [ -z "$PRINTERS" ] && error_exit "当前系统尚未配置任何打印机，请先连接并添加打印机后再运行本脚本！有问题联系开发者 VX:nmydzf"
     DEFAULT_PRINTER=$(echo "$PRINTERS" | head -n1)
     info "已发现打印机队列：$(echo "$PRINTERS" | tr '\n' ' ')"
     info "默认将使用：$DEFAULT_PRINTER"
 }
 
-############################  FRP  ############################
-install_frp() {
+# -------------------- FRP 安装 --------------------
+install_frp_if_needed() {
     [ -f "${FRP_PATH}/${FRP_NAME}" ] && { info "FRP 已安装"; return 0; }
     case $(uname -m) in
-        x86_64)  PLATFORM="amd64" ;;
+        x86_64) PLATFORM="amd64" ;;
         aarch64) PLATFORM="arm64" ;;
         armv7l|armhf) PLATFORM="arm" ;;
-        *) err "不支持的架构: $(uname -m)" ;;
+        *) error_exit "不支持的架构: $(uname -m)" ;;
     esac
     FILE_NAME="frp_${FRP_VERSION}_linux_${PLATFORM}"
     DOWNLOAD_URL="${PROXY_URL}https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${FILE_NAME}.tar.gz"
+
     info "下载并安装 FRP"
-    wget -q "$DOWNLOAD_URL" -O - | tar -zxf - -C /tmp || err "FRP 下载解压失败"
+    wget -q "$DOWNLOAD_URL" -O - | tar -zxf - -C /tmp || error_exit "FRP 安装失败"
     mkdir -p "${FRP_PATH}"
-    mv "/tmp/${FILE_NAME}/${FRP_NAME}" "${FRP_PATH}" || err "移动 FRP 二进制失败"
+    mv "/tmp/${FILE_NAME}/${FRP_NAME}" "${FRP_PATH}" || error_exit "移动 FRP 文件失败"
     rm -rf "/tmp/${FILE_NAME}"
 
     CURRENT_DATE=$(date +%m%d)
@@ -145,38 +147,67 @@ Restart=on-failure
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    systemctl start "${FRP_NAME}" && systemctl enable "${FRP_NAME}" || err "FRP 启动失败"
+    systemctl start "${FRP_NAME}" && systemctl enable "${FRP_NAME}" || error_exit "启动 FRP 失败"
 }
 
-############################  生成所有打印机地址+二维码  ############################
-gen_all_qr() {
-    # 反解 SERVICE_NAME
-    SERVICE_NAME=$(grep -oP 'nas-\K[0-9a-zA-Z]+' /lib/systemd/system/${FRP_NAME}.service 2>/dev/null || echo "unknown")
+# -------------------- 输出链接与二维码 --------------------
+detect_printers_and_show_urls() {
     PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
-    if [ -z "$PRINTERS" ]; then
-        warn "未检测到任何打印机"; return 1
+    DEFAULT_PRINTER=$(echo "$PRINTERS" | head -n1)
+    REMOTE_PRINT_ADDR="http://nas-${SERVICE_NAME}.frp.tzishue.tk/print.php?printer=${DEFAULT_PRINTER}"
+
+    echo -e "\n${GREEN}配置完成${FONT}"
+    echo -e "远程打印地址: ${REMOTE_PRINT_ADDR}"
+
+    echo -e "\n二维码:"
+    qrencode -t ANSIUTF8 "${REMOTE_PRINT_ADDR}"
+
+    if [ "$(echo "$PRINTERS" | wc -l)" -gt 1 ]; then
+        info "全部打印机链接:"
+        echo "$PRINTERS" | while read -r printer; do
+            echo "  - $printer: http://nas-${SERVICE_NAME}.frp.tzishue.tk/print.php?printer=${printer}"
+        done
     fi
-    info "当前全部打印机远程地址："
+}
+
+# -------------------- 轻量 print 命令 --------------------
+print_qr() {
+    [ -f "$FRP_CONFIG_FILE" ] || { warn "未找到 FRP 配置，请先部署"; exit 1; }
+    SUB_DOMAIN=$(grep -oP 'subdomain\s*=\s*"\K[^"]+' "$FRP_CONFIG_FILE" | head -n1)
+    [ -z "$SUB_DOMAIN" ] && { warn "解析子域名失败"; exit 1; }
+    PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
+    [ -z "$PRINTERS" ] && { warn "当前系统没有任何打印机"; exit 0; }
+    echo -e "${GREEN}当前全部打印机远程地址：${FONT}"
     for pr in $PRINTERS; do
-        url="http://nas-${SERVICE_NAME}.frp.tzishue.tk/print.php?printer=${pr}"
-        echo -e "${GREEN}● $pr${FONT}\n$url"
-        qrencode -t ANSIUTF8 "$url" 2>/dev/null || warn "生成二维码失败，确认已安装 qrencode"
+        URL="http://${SUB_DOMAIN}.frp.tzishue.tk/print.php?printer=${pr}"
+        echo -e "${GREEN}● $pr${FONT}\n$URL"
+        command -v qrencode >/dev/null && qrencode -t ANSIUTF8 "$URL" || warn "缺少 qrencode，无法显示二维码"
         echo
     done
 }
 
-############################  首次部署主流程  ############################
+# -------------------- 创建 print 快捷命令 --------------------
+install_print_cmd() {
+    cat >"$PRINT_CMD" <<'EOF'
+#!/usr/bin/env bash
+exec /usr/local/sbin/all_print.sh print
+EOF
+    chmod +x "$PRINT_CMD"
+}
+
+# -------------------- 主流程 --------------------
 main_deploy() {
     clean_cache
-    install_cups
-    install_lo
-    install_base
-    config_print
-    check_printers
-    install_frp
+    install_cups_if_needed
+    install_libreoffice_if_needed
+    install_base_tools
+    config_print_service
+    check_printer_or_exit
+    install_frp_if_needed
+    install_print_cmd
     info "重启 CUPS 服务"
     systemctl restart cups 2>/dev/null || service cups restart 2>/dev/null || warn "CUPS 重启失败，请手动检查"
-    gen_all_qr
+    detect_printers_and_show_urls
     echo -e "\n常用命令："
     echo "  重启 FRP : systemctl restart ${FRP_NAME}"
     echo "  重启 CUPS: systemctl restart cups"
@@ -185,10 +216,10 @@ main_deploy() {
 }
 
 #####################################################################
-# 双模式入口
+# 脚本入口
 #####################################################################
 case "$1" in
-    print) gen_all_qr ;;      # 手动/定时器/udev 都会走到这里
-    "") main_deploy ;;        # 首次部署
-    *)  err "用法: sudo $0   或   print"
+    print) print_qr ;;      # 纯查询模式
+    "") main_deploy ;;      # 首次部署
+    *)  error_exit "用法: sudo $0   或   print"
 esac
