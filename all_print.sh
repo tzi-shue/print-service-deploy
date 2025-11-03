@@ -1,9 +1,4 @@
 #!/bin/bash
-# ============================================================================
-# 全平台打印服务一键部署脚本
-# 兼容：Ubuntu(≥16.04) / Debian(≥9) / Armbian / Raspbian / 国产OS
-# 唯一改动：删除 set -e，所有关键命令均 || true 保护
-# ============================================================================
 
 #################### 通用工具 ####################
 color(){
@@ -130,7 +125,6 @@ install_frp(){
     mv "/tmp/${FILE}/${FRP_NAME}" "${FRP_PATH}"
     rm -rf "/tmp/${FILE}"
 
-    # 生成随机子域名
     DATE=$(date +%m%d)
     RAND=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c2)
     SERVICE_NAME="${DATE}${RAND}"
@@ -172,7 +166,6 @@ EOF
         systemctl daemon-reload
         systemctl enable --now ${FRP_NAME} || true
     else
-        # sysvinit 简单版
         cat >/etc/init.d/${FRP_NAME} <<EOF
 #!/bin/sh
 ### BEGIN INIT INFO
