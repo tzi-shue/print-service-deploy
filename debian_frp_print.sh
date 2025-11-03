@@ -19,13 +19,6 @@ REPO_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-s
 # -------------------- 0  必须是 root --------------------
 [ "$(id -u)" -ne 0 ] && error_exit "请用 root 运行本脚本"
 
-# -------------------- 1  装软件 --------------------
-info "2/8 安装 CUPS / LibreOffice / 工具"
-apt-get install -y --no-install-recommends \
-  cups cups-filters ghostscript \
-  printer-driver-gutenprint printer-driver-splix hplip foomatic-db-engine \
-  libreoffice-core libreoffice-writer libreoffice-calc \
-  wget curl qrencode
 
 # -------------------- 2  CUPS 远程访问 --------------------
 info "3-8 下载并替换 cupsd.conf"
