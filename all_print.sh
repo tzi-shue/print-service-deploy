@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  打印服务一键部署脚本  (自带 printurl 即时查询)
+#  打印服务一键部署（自带 printurl 即时查询）
 # =============================================================================
 set -e
 
@@ -22,7 +22,7 @@ warn()  { echo -e "${YELLOW}$1${FONT}"; }
 err()   { echo -e "${RED}$1${FONT}"; exit 1; }
 cmdx()  { command -v "$1" >/dev/null 2>&1; }
 
-# -------------------- 自复制 --------------------
+# ------ 自复制（仅当没躺在固定位置）------
 [ "$0" != "$TARGET" ] && {
     curl -fsSL "$SELF_URL" -o "$TARGET" || err "下载脚本失败"
     chmod +x "$TARGET"
@@ -30,12 +30,27 @@ cmdx()  { command -v "$1" >/dev/null 2>&1; }
     exec "$TARGET" "$@"
 }
 
-# -------------------- 缓存清理 --------------------
+# ------ 轻量读取模式 ------
+print_qr() {
+    [ -f "$FRP_CONFIG_FILE" ] || { warn "未找到 FRP 配置：$FRP_CONFIG_FILE"; exit 1; }
+    SUB_DOMAIN=$(grep -oP 'subdomain\s*=\s*"\K[^"]+' "$FRP_CONFIG_FILE" | head -n1)
+    [ -z "$SUB_DOMAIN" ] && { warn "解析 subdomain 失败"; exit 1; }
+    PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
+    [ -z "$PRINTERS" ] && { warn "当前系统没有任何打印机"; exit 0; }
+    echo -e "${GREEN}远程打印链接：${FONT}"
+    for pr in $PRINTERS; do
+        URL="http://${SUB_DOMAIN}.frp.tzishue.tk/print.php?printer=${pr}"
+        echo -e "${GREEN}● $pr${FONT}\n$URL"
+        cmdx qrencode && qrencode -t ANSIUTF8 "$URL" || echo -e "${YELLOW}(qrencode 未安装，无法显示二维码)${FONT}"
+        echo
+    done
+}
+
+# -------------------- 以下是你原来的完整部署流程 --------------------
 clean_cache() {
     cmdx apt-get && { apt-get clean >/dev/null 2>&1; apt-get autoremove -y >/dev/null 2>&1; }
 }
 
-# -------------------- CUPS 安装 --------------------
 install_cups() {
     cmdx cupsd || systemctl is-active --quiet cups 2>/dev/null || [ -f /usr/sbin/cupsd ] && { info "CUPS 已安装，跳过"; return 0; }
     if cmdx apt-get; then
@@ -49,7 +64,6 @@ install_cups() {
     cupsctl --remote-any || warn "CUPS 远程访问配置失败"
 }
 
-# -------------------- LibreOffice 安装 --------------------
 install_lo() {
     cmdx soffice && { info "LibreOffice 已安装"; return 0; }
     if cmdx apt-get; then
@@ -60,7 +74,6 @@ install_lo() {
     fi
 }
 
-# -------------------- 基础工具 --------------------
 install_base() {
     if cmdx apt-get; then
         export DEBIAN_FRONTEND=noninteractive
@@ -68,7 +81,6 @@ install_base() {
     else yum install -y wget curl qrencode || err "基础工具安装失败"; fi
 }
 
-# -------------------- 打印配置 --------------------
 config_print() {
     info "配置打印服务"
     TD=$(mktemp -d) && cd "$TD" || err "创建临时目录失败"
@@ -79,7 +91,6 @@ config_print() {
     rm -rf "$TD"
 }
 
-# -------------------- 检测打印机 --------------------
 check_printers() {
     PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
     [ -z "$PRINTERS" ] && err "当前系统尚未配置任何打印机，请先连接并添加打印机后再运行本脚本！有问题联系开发者 VX:nmydzf"
@@ -88,7 +99,6 @@ check_printers() {
     info "默认将使用：$DEFAULT_PRINTER"
 }
 
-# -------------------- FRP 安装 --------------------
 install_frp() {
     [ -f "${FRP_PATH}/${FRP_NAME}" ] && { info "FRP 已安装"; return 0; }
     case $(uname -m) in
@@ -148,23 +158,7 @@ EOF
     systemctl start "${FRP_NAME}" && systemctl enable "${FRP_NAME}" || err "FRP 启动失败"
 }
 
-# -------------------- 即时查询（纯读） --------------------
-print_qr() {
-    [ -f "$FRP_CONFIG_FILE" ] || { warn "未找到 FRP 配置：$FRP_CONFIG_FILE"; exit 1; }
-    SUB_DOMAIN=$(grep -oP 'subdomain\s*=\s*"\K[^"]+' "$FRP_CONFIG_FILE" | head -n1)
-    [ -z "$SUB_DOMAIN" ] && { warn "解析 subdomain 失败"; exit 1; }
-    PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
-    [ -z "$PRINTERS" ] && { warn "当前系统没有任何打印机"; exit 0; }
-    echo -e "${GREEN}当前全部打印机远程地址：${FONT}"
-    for pr in $PRINTERS; do
-        URL="http://${SUB_DOMAIN}.frp.tzishue.tk/print.php?printer=${pr}"
-        echo -e "${GREEN}● $pr${FONT}\n$URL"
-        command -v qrencode >/dev/null && qrencode -t ANSIUTF8 "$URL" || echo -e "${YELLOW}(qrencode 未安装，无法显示二维码)${FONT}"
-        echo
-    done
-}
-
-# -------------------- 部署主流程 --------------------
+# -------------------- 首次部署主流程 --------------------
 main_deploy() {
     clean_cache
     install_cups
@@ -173,18 +167,20 @@ main_deploy() {
     config_print
     check_printers
     install_frp
-    echo -e "\n常用命令："
-    echo "  重启 FRP : systemctl restart ${FRP_NAME}"
-    echo "  重启 CUPS: systemctl restart cups"
+    # ===== ① 部署完立即显示链接/二维码 =====
+    print_qr
+    # ======================================
+    info "重启 CUPS 服务"
+    systemctl restart cups 2>/dev/null || service cups restart 2>/dev/null || warn "CUPS 重启失败，请手动检查"
     echo -e "${GREEN}部署完成！以后直接运行 ${YELLOW}printurl${GREEN} 即可刷新所有打印机地址/二维码${FONT}"
     echo -e "${GREEN}有问题联系开发者 VX:nmydzf${FONT}"
 }
 
 #####################################################################
-# 入口分流
+# 双模式入口
 #####################################################################
 case "$1" in
-    print) print_qr ;;      # 即时查询
-    "") main_deploy ;;      # 首次部署
+    print) print_qr ;;      # 即时查询（只读）
+    "") main_deploy ;;      # 首次部署（完整）
     *)  err "用法: sudo $0   或   printurl"
 esac
