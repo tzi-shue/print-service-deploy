@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 打印服务一次性部署脚本（含Nginx+PHP，静默版）
+# 打印服务部署脚本（含Nginx+PHP）
 # =============================================================================
 set -e
 
@@ -12,8 +12,7 @@ REPO_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-s
 FRP_NAME="frpc"; FRP_VERSION="0.61.0"; FRP_PATH="/usr/local/frp"
 PROXY_URL="https://ghproxy.cfd/"
 FRP_CONFIG_FILE="/etc/frp/frpc.toml"
-PRINT_QR_SCRIPT="/usr/local/bin/printurl"  # 轻量查询脚本路径
-# 新增Nginx+PHP相关变量
+PRINT_QR_SCRIPT="/usr/local/bin/printurl"  
 WEB_ROOT="/var/www/html"
 PRINT_PHP="$WEB_ROOT/print.php"
 NGINX_CONF="/etc/nginx/sites-available/print-service"
@@ -29,7 +28,6 @@ clean_cache() {
     cmdx apt-get && { apt-get clean >/dev/null 2>&1; apt-get autoremove -y >/dev/null 2>&1; }
 }
 
-# 新增：安装Nginx+PHP（适配原脚本结构）
 install_nginx_php() {
     # 安装Nginx
     if systemctl is-active --quiet nginx; then
@@ -75,7 +73,6 @@ install_nginx_php() {
         fi
     fi
 
-    # 配置Nginx解析PHP（适配不同PHP socket路径）
     info "配置 Nginx 解析 PHP"
     local PHP_SOCKET="/run/php/php${PHP_VER}-fpm.sock"
     [ -f "/run/php-fpm/www.sock" ] && PHP_SOCKET="/run/php-fpm/www.sock"
@@ -105,7 +102,6 @@ EOF
     nginx -t && systemctl reload nginx || warn "Nginx 配置重载失败，需手动检查"
 }
 
-# 原功能：安装CUPS（保留并适配结构）
 install_cups() {
     cmdx cupsd || systemctl is-active --quiet cups 2>/dev/null || [ -f /usr/sbin/cupsd ] && { info "CUPS 已安装，跳过"; return 0; }
     info "安装 CUPS 打印服务"
@@ -120,7 +116,6 @@ install_cups() {
     cupsctl --remote-any || warn "CUPS 远程访问配置失败"
 }
 
-# 原功能：安装LibreOffice（保留）
 install_lo() {
     cmdx soffice && { info "LibreOffice 已安装，跳过"; return 0; }
     info "安装 LibreOffice"
@@ -132,7 +127,6 @@ install_lo() {
     fi
 }
 
-# 原功能：安装基础工具（保留，确保含qrencode）
 install_base() {
     info "安装基础工具"
     if cmdx apt-get; then
@@ -142,27 +136,22 @@ install_base() {
 }
 
 # -------------------- 服务配置 --------------------
-# 原功能：配置打印服务（适配Nginx的WEB_ROOT路径）
 config_print() {
     info "配置打印网页接口"
     TD=$(mktemp -d) && cd "$TD" || err "创建临时目录失败"
     curl -fsSL -o cupsd.conf "${REPO_URL}/configs/cupsd.conf" || err "下载 cupsd.conf 失败"
     curl -fsSL -o print.php "${REPO_URL}/configs/print.php"   || err "下载 print.php 失败"
-    # 替换cupsd.conf（原逻辑保留）
     cp cupsd.conf /etc/cups/cupsd.conf && chown root:lp /etc/cups/cupsd.conf && chmod 640 /etc/cups/cupsd.conf || err "替换 cupsd.conf 失败"
-    # 部署print.php到Nginx根目录
     mkdir -p "$WEB_ROOT" && cp print.php "$PRINT_PHP" && chmod 644 "$PRINT_PHP" || err "部署 print.php 失败"
     rm -rf "$TD"
 }
 
-# 原功能：检查打印机（保留）
 check_printers() {
     local PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
     [ -z "$PRINTERS" ] && err "当前系统未配置打印机！请先连接打印机并添加队列后重新执行"
     info "已发现打印机：$(echo "$PRINTERS" | tr '\n' ' ')"
 }
 
-# 原功能：安装FRP（保留，新增SERVICE_NAME全局可用）
 install_frp() {
     [ -f "${FRP_PATH}/${FRP_NAME}" ] && { info "FRP 已安装，跳过"; return 0; }
     info "安装 FRP 客户端"
@@ -181,7 +170,6 @@ install_frp() {
     mv "/tmp/${FILE_NAME}/${FRP_NAME}" "${FRP_PATH}" || err "移动 FRP 二进制失败"
     rm -rf "/tmp/${FILE_NAME}"
 
-    # 生成随机FRP配置（SERVICE_NAME全局生效，用于部署后提示）
     local CURRENT_DATE=$(date +%m%d)
     local RANDOM_SUFFIX=$(tr -dc 'a-zA-Z0-9' </dev/urandom | head -c 2)
     SERVICE_NAME="${CURRENT_DATE}${RANDOM_SUFFIX}"
@@ -208,7 +196,6 @@ localPort = 80
 subdomain = "nas-${SERVICE_NAME}"
 EOL
 
-    # 配置FRP系统服务
     cat >"/lib/systemd/system/${FRP_NAME}.service" <<EOF
 [Unit]
 Description=Frp Client
@@ -225,13 +212,11 @@ EOF
     systemctl start "${FRP_NAME}" && systemctl enable "${FRP_NAME}" || err "FRP 启动失败"
 }
 
-# -------------------- 静默安装轻量查询工具（核心修改：无脚本内容输出） --------------------
+# -------------------- 静默安装轻量查询工具 --------------------
 install_printurl() {
-    info "安装轻量查询工具 printurl"  # 仅保留进度提示
-    # 加 > /dev/null 2>&1 隐藏脚本内容输出，仅静默创建文件
+    info "安装轻量查询工具 printurl"  
     sudo tee "$PRINT_QR_SCRIPT" > /dev/null 2>&1 << 'INNER_EOF'
 #!/usr/bin/env bash
-# 打印服务轻量查询脚本（部署后随时使用）
 GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; FONT="\033[0m"
 FRP_CONFIG_FILE="/etc/frp/frpc.toml"
 warn()  { echo -e "${YELLOW}$1${FONT}"; }
@@ -239,15 +224,12 @@ err()   { echo -e "${RED}$1${FONT}"; exit 1; }
 cmdx()  { command -v "$1" >/dev/null 2>&1; }
 
 main() {
-    # 读取FRP配置中的subdomain
     SUB_DOMAIN=$(grep -oP 'subdomain\s*=\s*"\K[^"]+' "$FRP_CONFIG_FILE" 2>/dev/null | head -n1)
     [ -z "$SUB_DOMAIN" ] && err "FRP配置缺失：$FRP_CONFIG_FILE 或 subdomain解析失败"
     
-    # 读取系统打印机列表
     PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
     [ -z "$PRINTERS" ] && warn "当前系统无可用打印机" && exit 0
     
-    # 输出链接和二维码
     echo -e "${GREEN}远程打印链接：${FONT}"
     for pr in $PRINTERS; do
         URL="http://${SUB_DOMAIN}.frp.tzishue.tk/print.php?printer=${pr}"
@@ -258,7 +240,6 @@ main() {
 }
 main
 INNER_EOF
-    # 静默赋予执行权限，失败时才提示
     chmod +x "$PRINT_QR_SCRIPT" > /dev/null 2>&1 || warn "printurl 权限配置失败，请手动执行：chmod +x $PRINT_QR_SCRIPT"
 }
 
@@ -267,7 +248,7 @@ main_deploy() {
     info "开始打印服务部署（含Nginx+PHP）"
     clean_cache
     install_base
-    install_nginx_php  # 新增：先安装Nginx+PHP环境
+    install_nginx_php  
     install_cups
     install_lo
     config_print
@@ -275,16 +256,13 @@ main_deploy() {
     install_frp
     install_printurl 
 
-    # 部署完成后首次查询链接
     info "部署完成！首次查询结果如下："
     "$PRINT_QR_SCRIPT"
 
-    # 重启关键服务
     systemctl restart cups 2>/dev/null || service cups restart 2>/dev/null || warn "CUPS重启失败，请手动执行：systemctl restart cups"
     systemctl restart nginx 2>/dev/null || service nginx restart 2>/dev/null || warn "Nginx重启失败，请手动执行：systemctl restart nginx"
     echo -e "\n${GREEN}后续查询直接执行命令：printurl${FONT}"
     echo -e "${GREEN}Nginx重启命令：systemctl restart nginx | PHP-FPM重启命令：systemctl restart php7.4-fpm（或php-fpm）${FONT}"
 }
 
-# 启动部署
 main_deploy
