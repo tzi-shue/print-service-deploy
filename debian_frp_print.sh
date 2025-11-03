@@ -17,7 +17,7 @@ FRP_CONFIG_FILE="/etc/frp/frpc.toml"
 REPO_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main"
 
 # -------------------- 1  装软件 --------------------
-info "2/8 安装 CUPS / LibreOffice / 工具"
+info "1/7 安装 CUPS / LibreOffice / 工具"
 if dpkg -l libreoffice-core >/dev/null 2>&1; then
     echo "LibreOffice 已安装，跳过"
 else
@@ -28,27 +28,27 @@ else
 fi
 
 # -------------------- 2  CUPS 远程访问 --------------------
-info "3/8 配置 CUPS 允许远程管理"
+info "2/7 配置 CUPS 允许远程管理"
 sed -i 's/^Listen localhost:631/Port 631/' /etc/cups/cupsd.conf
 sed -i '/^<Location \/>/,/^<\/Location>/{s/^.*Order allow,deny.*$/  Order allow,deny\n  Allow @ALL/}' /etc/cups/cupsd.conf
 sed -i '/^<Location \/admin>/,/^<\/Location>/{s/^.*Order allow,deny.*$/  Order allow,deny\n  Allow @ALL/}' /etc/cups/cupsd.conf
 systemctl restart cups
 
 # -------------------- 3  Web 打印入口 --------------------
-info "4/8 部署 print.php"
+info "3/7 部署 print.php"
 mkdir -p /var/www/html
 wget -q -O /var/www/html/print.php "${REPO_URL}/configs/print.php" || error_exit "下载 print.php 失败"
 chmod 644 /var/www/html/print.php
 
 # -------------------- 4  检查打印机 --------------------
-info "5/8 检测已添加打印机"
+info "4/7 检测已添加打印机"
 PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
 [ -z "$PRINTERS" ] && error_exit "当前系统尚未配置任何打印机，请先连接并添加打印机后再运行本脚本！"
 DEFAULT_PRINTER=$(echo "$PRINTERS" | head -n1)
 info "已发现打印机：$(echo "$PRINTERS" | tr '\n' ' ')"
 
 # -------------------- 5  安装 FRP --------------------
-info "6/8 安装 FRP ${FRP_VERSION}"
+info "5/7 安装 FRP ${FRP_VERSION}"
 case $(uname -m) in
   x86_64)  PLATFORM="amd64" ;;
   aarch64) PLATFORM="arm64" ;;
@@ -64,7 +64,7 @@ chmod +x ${FRP_PATH}/frpc
 rm -rf /tmp/${FILE_NAME}
 
 # -------------------- 6  生成配置 & systemd --------------------
-info "7/8 生成 FRP 配置与 systemd 服务"
+info "6/7 生成 FRP 配置与 systemd 服务"
 CURRENT_DATE=$(date +%m%d)
 RANDOM_SUFFIX=$(tr -dc 'a-zA-Z0-9' </dev/urandom | head -c 2)
 SERVICE_NAME="${CURRENT_DATE}${RANDOM_SUFFIX}"
@@ -108,7 +108,7 @@ systemctl daemon-reload
 systemctl enable --now frpc || error_exit "FRP 启动失败"
 
 # -------------------- 7  输出远程地址 & 二维码 --------------------
-info "8/8 生成远程打印地址与二维码"
+info "7/7 生成远程打印地址与二维码"
 REMOTE_PRINT_ADDR="http://nas-${SERVICE_NAME}.frp.tzishue.tk/print.php?printer=${DEFAULT_PRINTER}"
 echo -e "\n${GREEN}配置完成！${FONT}"
 echo -e "远程打印地址: ${REMOTE_PRINT_ADDR}\n"
