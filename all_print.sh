@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  打印服务一键部署（自带 printurl 即时查询）
+# 打印服
 # =============================================================================
 set -e
 
-# -------------------- 颜色 --------------------
+# -------------------- 颜色配置 --------------------
 GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; FONT="\033[0m"
 
-# -------------------- 变量 --------------------
+# -------------------- 核心变量 --------------------
 REPO_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main"
 FRP_NAME="frpc"; FRP_VERSION="0.61.0"; FRP_PATH="/usr/local/frp"
 PROXY_URL="https://ghproxy.cfd/"
 FRP_CONFIG_FILE="/etc/frp/frpc.toml"
-SELF_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/all_print.sh"
-TARGET="/usr/local/sbin/all_print.sh"
-PRINT_CMD="/usr/local/bin/printurl"
+PRINT_QR_SCRIPT="/usr/local/bin/printurl"  # 指向轻量查询脚本
 
 # -------------------- 工具函数 --------------------
 info()  { echo -e "${GREEN}=== $1 ===${FONT}"; }
@@ -22,36 +20,7 @@ warn()  { echo -e "${YELLOW}$1${FONT}"; }
 err()   { echo -e "${RED}$1${FONT}"; exit 1; }
 cmdx()  { command -v "$1" >/dev/null 2>&1; }
 
-# ------ 自复制（仅当没躺在固定位置）------
-[ "$0" != "$TARGET" ] && {
-    curl -fsSL "$SELF_URL" -o "$TARGET" || err "下载脚本失败"
-    chmod +x "$TARGET"
-    ln -sf "$TARGET" "$PRINT_CMD"
-    exec "$TARGET" "$@"
-}
-
-# ------ 轻量读取模式（核心修改：仅保留必要逻辑）------
-print_qr() {
-    # 直接读取FRP配置中的subdomain，不额外检查
-    SUB_DOMAIN=$(grep -oP 'subdomain\s*=\s*"\K[^"]+' "$FRP_CONFIG_FILE" | head -n1)
-    # 直接获取打印机列表，不额外检查
-    PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
-    
-    # 仅在关键信息缺失时提示，无多余操作
-    [ -z "$SUB_DOMAIN" ] && warn "解析 subdomain 失败" && exit 1
-    [ -z "$PRINTERS" ] && warn "当前系统没有任何打印机" && exit 0
-    
-    # 直接拼接链接并输出
-    echo -e "${GREEN}远程打印链接：${FONT}"
-    for pr in $PRINTERS; do
-        URL="http://${SUB_DOMAIN}.frp.tzishue.tk/print.php?printer=${pr}"
-        echo -e "${GREEN}● $pr${FONT}\n$URL"
-        cmdx qrencode && qrencode -t ANSIUTF8 "$URL" || echo -e "${YELLOW}(qrencode 未安装，无法显示二维码)${FONT}"
-        echo
-    done
-}
-
-# -------------------- 以下是你原来的完整部署流程 --------------------
+# -------------------- 依赖安装 --------------------
 clean_cache() {
     cmdx apt-get && { apt-get clean >/dev/null 2>&1; apt-get autoremove -y >/dev/null 2>&1; }
 }
@@ -70,7 +39,7 @@ install_cups() {
 }
 
 install_lo() {
-    cmdx soffice && { info "LibreOffice 已安装"; return 0; }
+    cmdx soffice && { info "LibreOffice 已安装，跳过"; return 0; }
     if cmdx apt-get; then
         export DEBIAN_FRONTEND=noninteractive
         apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer libreoffice-calc || { clean_cache; apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer libreoffice-calc || err "LibreOffice 安装失败"; }
@@ -86,8 +55,9 @@ install_base() {
     else yum install -y wget curl qrencode || err "基础工具安装失败"; fi
 }
 
+# -------------------- 服务配置 --------------------
 config_print() {
-    info "配置打印服务"
+    info "配置打印网页接口"
     TD=$(mktemp -d) && cd "$TD" || err "创建临时目录失败"
     curl -fsSL -o cupsd.conf "${REPO_URL}/configs/cupsd.conf" || err "下载 cupsd.conf 失败"
     curl -fsSL -o print.php "${REPO_URL}/configs/print.php"   || err "下载 print.php 失败"
@@ -98,14 +68,12 @@ config_print() {
 
 check_printers() {
     PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
-    [ -z "$PRINTERS" ] && err "当前系统尚未配置任何打印机，请先连接并添加打印机后再运行本脚本！有问题联系开发者 VX:nmydzf"
-    DEFAULT_PRINTER=$(echo "$PRINTERS" | head -n1)
-    info "已发现打印机队列：$(echo "$PRINTERS" | tr '\n' ' ')"
-    info "默认将使用：$DEFAULT_PRINTER"
+    [ -z "$PRINTERS" ] && err "当前系统未配置打印机！请先连接打印机并添加队列后重新执行"
+    info "已发现打印机：$(echo "$PRINTERS" | tr '\n' ' ')"
 }
 
 install_frp() {
-    [ -f "${FRP_PATH}/${FRP_NAME}" ] && { info "FRP 已安装"; return 0; }
+    [ -f "${FRP_PATH}/${FRP_NAME}" ] && { info "FRP 已安装，跳过"; return 0; }
     case $(uname -m) in
         x86_64)  PLATFORM="amd64" ;;
         aarch64) PLATFORM="arm64" ;;
@@ -115,12 +83,13 @@ install_frp() {
     FILE_NAME="frp_${FRP_VERSION}_linux_${PLATFORM}"
     DOWNLOAD_URL="${PROXY_URL}https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${FILE_NAME}.tar.gz"
 
-    info "下载并安装 FRP"
+    info "安装 FRP 客户端"
     wget -q "$DOWNLOAD_URL" -O - | tar -zxf - -C /tmp || err "FRP 下载解压失败"
     mkdir -p "${FRP_PATH}"
     mv "/tmp/${FILE_NAME}/${FRP_NAME}" "${FRP_PATH}" || err "移动 FRP 二进制失败"
     rm -rf "/tmp/${FILE_NAME}"
 
+    # 生成随机配置
     CURRENT_DATE=$(date +%m%d)
     RANDOM_SUFFIX=$(tr -dc 'a-zA-Z0-9' </dev/urandom | head -c 2)
     SERVICE_NAME="${CURRENT_DATE}${RANDOM_SUFFIX}"
@@ -147,6 +116,7 @@ localPort = 80
 subdomain = "nas-${SERVICE_NAME}"
 EOL
 
+    # 配置FRP服务
     cat >"/lib/systemd/system/${FRP_NAME}.service" <<EOF
 [Unit]
 Description=Frp Client
@@ -163,34 +133,57 @@ EOF
     systemctl start "${FRP_NAME}" && systemctl enable "${FRP_NAME}" || err "FRP 启动失败"
 }
 
-# -------------------- 首次部署主流程 --------------------
+# -------------------- 部署轻量查询脚本 --------------------
+install_printurl() {
+    info "安装轻量查询工具 printurl"
+    sudo tee "$PRINT_QR_SCRIPT" << 'INNER_EOF'
+#!/usr/bin/env bash
+GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; FONT="\033[0m"
+FRP_CONFIG_FILE="/etc/frp/frpc.toml"
+warn()  { echo -e "${YELLOW}$1${FONT}"; }
+err()   { echo -e "${RED}$1${FONT}"; exit 1; }
+cmdx()  { command -v "$1" >/dev/null 2>&1; }
+
+main() {
+    SUB_DOMAIN=$(grep -oP 'subdomain\s*=\s*"\K[^"]+' "$FRP_CONFIG_FILE" 2>/dev/null | head -n1)
+    [ -z "$SUB_DOMAIN" ] && err "FRP配置缺失：$FRP_CONFIG_FILE 或 subdomain解析失败"
+    
+    PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
+    [ -z "$PRINTERS" ] && warn "无可用打印机" && exit 0
+    
+    echo -e "${GREEN}远程打印链接：${FONT}"
+    for pr in $PRINTERS; do
+        URL="http://${SUB_DOMAIN}.frp.tzishue.tk/print.php?printer=${pr}"
+        echo -e "${GREEN}● $pr${FONT}\n$URL"
+        cmdx qrencode && qrencode -t ANSIUTF8 "$URL" || echo -e "${YELLOW}(qrencode未安装，无法显示二维码)${FONT}"
+        echo
+    done
+}
+main
+INNER_EOF
+    chmod +x "$PRINT_QR_SCRIPT" || warn "printurl 赋予权限失败，请手动执行 chmod +x $PRINT_QR_SCRIPT"
+}
+
+# -------------------- 主部署流程 --------------------
 main_deploy() {
+    info "开始打印服务部署（仅需执行一次）"
     clean_cache
+    install_base
     install_cups
     install_lo
-    install_base
     config_print
     check_printers
     install_frp
-    # ===== ① 部署完立即显示链接/二维码 =====
-    print_qr
-    # ======================================
-    info "重启 CUPS 服务"
-    systemctl restart cups 2>/dev/null || service cups restart 2>/dev/null || warn "CUPS 重启失败，请手动检查"
-    echo -e "${GREEN}部署完成！以后直接运行 ${YELLOW}printurl${GREEN} 即可刷新所有打印机地址/二维码${FONT}"
-    echo -e "${GREEN}有问题联系开发者 VX:nmydzf${FONT}"
+    install_printurl  # 自动安装轻量查询脚本
+
+    # 部署完成后首次查询
+    info "部署完成！首次查询结果如下："
+    "$PRINT_QR_SCRIPT"
+
+    # 重启CUPS
+    systemctl restart cups 2>/dev/null || service cups restart 2>/dev/null || warn "CUPS重启失败，请手动执行 systemctl restart cups"
+    echo -e "\n${GREEN}后续查询直接执行命令：printurl${FONT}"
 }
 
-#####################################################################
-# 双模式入口（修复：printurl 直接轻量查询）
-#####################################################################
-# 若命令是 printurl，直接触发轻量查询，跳过所有部署流程
-if [ "$(basename "$0")" = "printurl" ]; then
-    print_qr
-else
-    case "$1" in
-        print) print_qr ;;      # 即时查询（只读）
-        "") main_deploy ;;      # 首次部署（完整）
-        *)  err "用法: sudo $0   或   printurl"
-    esac
-fi
+# 启动部署
+main_deploy
