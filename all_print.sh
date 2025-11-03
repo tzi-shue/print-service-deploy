@@ -84,6 +84,7 @@ install_tools(){
 
 #################### 打印服务配置 ####################
 config_print(){
+set -x
     info "配置打印服务"
     temp=$(mktemp -d) || exit 1
     cd "$temp"
@@ -97,6 +98,7 @@ config_print(){
     chmod 644 /var/www/html/print.php
     cd /
     rm -rf "$temp"
+set +x
 }
 
 #################### 打印机检测 ####################
