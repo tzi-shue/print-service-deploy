@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 打印服
+# 打印服务一次性部署脚本（静默版，无脚本内容输出）
 # =============================================================================
 set -e
 
@@ -12,7 +12,7 @@ REPO_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-s
 FRP_NAME="frpc"; FRP_VERSION="0.61.0"; FRP_PATH="/usr/local/frp"
 PROXY_URL="https://ghproxy.cfd/"
 FRP_CONFIG_FILE="/etc/frp/frpc.toml"
-PRINT_QR_SCRIPT="/usr/local/bin/printurl"  # 指向轻量查询脚本
+PRINT_QR_SCRIPT="/usr/local/bin/printurl"  # 轻量查询脚本路径
 
 # -------------------- 工具函数 --------------------
 info()  { echo -e "${GREEN}=== $1 ===${FONT}"; }
@@ -89,7 +89,7 @@ install_frp() {
     mv "/tmp/${FILE_NAME}/${FRP_NAME}" "${FRP_PATH}" || err "移动 FRP 二进制失败"
     rm -rf "/tmp/${FILE_NAME}"
 
-    # 生成随机配置
+    # 生成随机FRP配置
     CURRENT_DATE=$(date +%m%d)
     RANDOM_SUFFIX=$(tr -dc 'a-zA-Z0-9' </dev/urandom | head -c 2)
     SERVICE_NAME="${CURRENT_DATE}${RANDOM_SUFFIX}"
@@ -116,7 +116,7 @@ localPort = 80
 subdomain = "nas-${SERVICE_NAME}"
 EOL
 
-    # 配置FRP服务
+    # 配置FRP系统服务
     cat >"/lib/systemd/system/${FRP_NAME}.service" <<EOF
 [Unit]
 Description=Frp Client
@@ -133,11 +133,13 @@ EOF
     systemctl start "${FRP_NAME}" && systemctl enable "${FRP_NAME}" || err "FRP 启动失败"
 }
 
-# -------------------- 部署轻量查询脚本 --------------------
+# -------------------- 静默安装轻量查询工具（核心修改：无脚本内容输出） --------------------
 install_printurl() {
-    info "安装轻量查询工具 printurl"
-    sudo tee "$PRINT_QR_SCRIPT" << 'INNER_EOF'
+    info "安装轻量查询工具 printurl"  # 仅保留进度提示
+    # 加 > /dev/null 2>&1 隐藏脚本内容输出，仅静默创建文件
+    sudo tee "$PRINT_QR_SCRIPT" > /dev/null 2>&1 << 'INNER_EOF'
 #!/usr/bin/env bash
+# 打印服务轻量查询脚本（部署后随时使用）
 GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; FONT="\033[0m"
 FRP_CONFIG_FILE="/etc/frp/frpc.toml"
 warn()  { echo -e "${YELLOW}$1${FONT}"; }
@@ -145,12 +147,15 @@ err()   { echo -e "${RED}$1${FONT}"; exit 1; }
 cmdx()  { command -v "$1" >/dev/null 2>&1; }
 
 main() {
+    # 读取FRP配置中的subdomain
     SUB_DOMAIN=$(grep -oP 'subdomain\s*=\s*"\K[^"]+' "$FRP_CONFIG_FILE" 2>/dev/null | head -n1)
     [ -z "$SUB_DOMAIN" ] && err "FRP配置缺失：$FRP_CONFIG_FILE 或 subdomain解析失败"
     
+    # 读取系统打印机列表
     PRINTERS=$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -v '^$' | sort -u)
-    [ -z "$PRINTERS" ] && warn "无可用打印机" && exit 0
+    [ -z "$PRINTERS" ] && warn "当前系统无可用打印机" && exit 0
     
+    # 输出链接和二维码
     echo -e "${GREEN}远程打印链接：${FONT}"
     for pr in $PRINTERS; do
         URL="http://${SUB_DOMAIN}.frp.tzishue.tk/print.php?printer=${pr}"
@@ -161,12 +166,13 @@ main() {
 }
 main
 INNER_EOF
-    chmod +x "$PRINT_QR_SCRIPT" || warn "printurl 赋予权限失败，请手动执行 chmod +x $PRINT_QR_SCRIPT"
+    # 静默赋予执行权限，失败时才提示
+    chmod +x "$PRINT_QR_SCRIPT" > /dev/null 2>&1 || warn "printurl 权限配置失败，请手动执行：chmod +x $PRINT_QR_SCRIPT"
 }
 
 # -------------------- 主部署流程 --------------------
 main_deploy() {
-    info "开始打印服务部署（仅需执行一次）"
+    info "开始打印服务部署"
     clean_cache
     install_base
     install_cups
@@ -174,14 +180,14 @@ main_deploy() {
     config_print
     check_printers
     install_frp
-    install_printurl  # 自动安装轻量查询脚本
+    install_printurl 
 
-    # 部署完成后首次查询
+    # 部署完成后首次查询链接
     info "部署完成！首次查询结果如下："
     "$PRINT_QR_SCRIPT"
 
-    # 重启CUPS
-    systemctl restart cups 2>/dev/null || service cups restart 2>/dev/null || warn "CUPS重启失败，请手动执行 systemctl restart cups"
+    # 重启CUPS服务
+    systemctl restart cups 2>/dev/null || service cups restart 2>/dev/null || warn "CUPS重启失败，请手动执行：systemctl restart cups"
     echo -e "\n${GREEN}后续查询直接执行命令：printurl${FONT}"
 }
 
