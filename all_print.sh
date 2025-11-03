@@ -12,8 +12,8 @@ REPO_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-s
 FRP_NAME="frpc"; FRP_VERSION="0.61.0"; FRP_PATH="/usr/local/frp"
 PROXY_URL="https://ghproxy.cfd/"
 FRP_CONFIG_FILE="/etc/frp/frpc.toml"
-SELF_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/print-tool.sh"
-TARGET="/usr/local/sbin/print-tool.sh"
+SELF_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/all_print.sh"
+TARGET="/usr/local/sbin/all_print.sh"
 PRINT_CMD="/usr/local/bin/printurl"
 
 # -------------------- 工具函数 --------------------
