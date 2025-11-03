@@ -28,10 +28,11 @@ else
 fi
 
 # -------------------- 2  CUPS 远程访问 --------------------
-info "2/7 配置 CUPS 允许远程管理"
-sed -i 's/^Listen localhost:631/Port 631/' /etc/cups/cupsd.conf
-sed -i '/^<Location \/>/,/^<\/Location>/{s/^.*Order allow,deny.*$/  Order allow,deny\n  Allow @ALL/}' /etc/cups/cupsd.conf
-sed -i '/^<Location \/admin>/,/^<\/Location>/{s/^.*Order allow,deny.*$/  Order allow,deny\n  Allow @ALL/}' /etc/cups/cupsd.conf
+info "2/7 下载并替换 cupsd.conf"
+TEMP_DIR=$(mktemp -d) || error_exit "创建临时目录失败"
+curl -fsSL -o "${TEMP_DIR}/cupsd.conf" "${REPO_URL}/configs/cupsd.conf" || error_exit "下载 cupsd.conf 失败"
+cp "${TEMP_DIR}/cupsd.conf" /etc/cups/cupsd.conf && chown root:lp /etc/cups/cupsd.conf && chmod 640 /etc/cups/cupsd.conf || error_exit "替换 cupsd.conf 失败"
+rm -rf "${TEMP_DIR}"
 systemctl restart cups
 
 # -------------------- 3  Web 打印入口 --------------------
