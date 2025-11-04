@@ -32,7 +32,7 @@ function getPrinters(): array
 [$printers, $defaultPrinter] = getPrinters();
 
 /* ---------- 远端小程序二维码 ---------- */
-$wxQrUrl = 'https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/1000073677.jpg'; // 换你自己的直链
+$wxQrUrl = 'https://img.zyshare.top/xcx.jpg'; // 换你自己的直链
 $wxQrBin = @file_get_contents($wxQrUrl);
 $wxQrB64 = $wxQrBin ? base64_encode($wxQrBin) : '';
 
