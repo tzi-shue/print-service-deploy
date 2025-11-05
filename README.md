@@ -4,9 +4,9 @@
 
 ## 快速开始
 
-### 方法一：直接运行（无nginx环境）
+### 方法一：直接运行（海纳斯系统）
 ```bash
-sudo bash -c "$(curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/frp_print.sh)"
+sudo bash -c "$(curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/hinas_frp_print.sh)"
 ```
 
 ### 方法一：直接运行（nginx环境）
@@ -39,6 +39,7 @@ sudo ./frp_print.sh
 ```bash
 sudo bash -c "$(curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/copy_print.sh)"
 ```
+
 
 
 
