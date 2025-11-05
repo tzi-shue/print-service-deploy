@@ -16,17 +16,17 @@ sudo bash -c "$(curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com
 
 
 ### 方法二：直接运行
-# 1. 下载脚本到本地
+# 1. 下载脚本到本地（海纳斯系统）
 ```bash
-curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/frp_print.sh -o frp_print.sh
+curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/frp_print.sh -o hinas_frp_print.sh
 ```
 # 2. 赋予执行权限
 ```bash
-chmod +x frp_print.sh
+chmod +x hinas_frp_print.sh
 ```
 # 3. 用root权限执行（和原命令效果一致，但可提前查看脚本内容）
 ```bash
-sudo ./frp_print.sh
+sudo ./hinas_frp_print.sh
 ```
 
 # 小程序打印服务自动拷贝必要文件
@@ -39,6 +39,7 @@ sudo ./frp_print.sh
 ```bash
 sudo bash -c "$(curl -fsSL https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/copy_print.sh)"
 ```
+
 
 
 
