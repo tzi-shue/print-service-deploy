@@ -93,13 +93,14 @@ install_frp() {
     RANDOM_SUFFIX=$(tr -dc 'a-zA-Z0-9' </dev/urandom | head -c 2)
     SERVICE_NAME="${CURRENT_DATE}${RANDOM_SUFFIX}"
     REMOTE_PORT_SSH=$((RANDOM % 3001 + 3000))
+    CLIENT_ID="client_${SERVICE_NAME}"
 
     mkdir -p "$(dirname "${FRP_CONFIG_FILE}")"
     cat >"${FRP_CONFIG_FILE}" <<EOL
 serverAddr = "frps.tzishue.tk"
 serverPort = 7000
 auth.token = "12345"
-user = "client-${SERVICE_NAME}"
+user = "${CLIENT_ID}"
 
 [[proxies]]
 name = "print-ssh-${SERVICE_NAME}"
