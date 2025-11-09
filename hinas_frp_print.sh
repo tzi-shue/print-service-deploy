@@ -99,6 +99,7 @@ install_frp() {
 serverAddr = "frps.tzishue.tk"
 serverPort = 7000
 auth.token = "12345"
+user = "client-${SERVICE_NAME}"
 
 [[proxies]]
 name = "print-ssh-${SERVICE_NAME}"
