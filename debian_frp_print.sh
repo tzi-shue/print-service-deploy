@@ -30,11 +30,13 @@ clean_cache() {
 }
 
 install_base() {
-    info "安装基础工具 (wget curl qrencode)"
+    info "安装基础工具 (wget curl qrencode fonts-noto-cjk)"
     if cmdx apt-get; then
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq || warn "apt update 失败，继续安装"
-        apt-get install -y --no-install-recommends wget curl qrencode || { clean_cache; apt-get install -y --no-install-recommends wget curl qrencode || err "基础工具安装失败"; }
+        apt-get install -y --no-install-recommends wget curl qrencode fonts-noto-cjk || \
+        { clean_cache; apt-get install -y --no-install-recommends wget curl qrencode fonts-noto-cjk || \
+          err "基础工具/字体安装失败"; }
     else
         err "未检测到 apt-get，脚本仅针对 Debian/Ubuntu 系列"
     fi
