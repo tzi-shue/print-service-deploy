@@ -1,0 +1,22 @@
+[Unit]
+Description=Printer WebSocket Client
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/php /opt/printer-client/printer_client.php
+WorkingDirectory=/opt/printer-client
+Restart=always
+RestartSec=5
+User=root
+
+# 环境变量
+Environment=HOME=/tmp
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=printer-client
+
+[Install]
+WantedBy=multi-user.target
