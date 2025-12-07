@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================
-# WebSocket 打印客户端一键安装配置脚本
+#      打印客户端一键安装配置脚本
 # 适用于: Debian/Ubuntu/Armbian 系统
 # 功能: 检查环境、安装依赖、配置打印服务
 # ============================================
@@ -18,7 +18,7 @@ NC='\033[0m' # No Color
 INSTALL_DIR="/opt/websocket_printer"
 SERVICE_NAME="websocket-printer"
 LOG_FILE="/var/log/websocket_printer.log"
-DEFAULT_SERVER="ws://xinprint.zyshare.top:8089"  # 默认WebSocket服务器地址
+DEFAULT_SERVER="ws://xinprint.zyshare.top:8089"  
 
 # 远程文件地址
 REMOTE_BASE_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/configs"
@@ -555,7 +555,7 @@ show_summary() {
     
     echo ""
     echo "============================================"
-    echo "  WebSocket 打印客户端安装完成!"
+    echo "           打印客户端安装完成!"
     echo "============================================"
     echo ""
     echo "安装目录: $INSTALL_DIR"
@@ -608,7 +608,7 @@ uninstall() {
 show_menu() {
     echo ""
     echo "============================================"
-    echo "  WebSocket 打印客户端安装脚本"
+    echo "           打印客户端安装脚本"
     echo "============================================"
     echo ""
     echo "  1. 完整安装 (推荐)"
