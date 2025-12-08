@@ -1,3 +1,995 @@
+#!/usr/bin/env php
 <?php
-eval(gzinflate(base64_decode('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')));
-?>
+/**
+ * 打印机端 WebSocket 客户端
+ * 
+ * 功能：
+ * 1. 连接到服务器 WebSocket
+ * 2. 注册设备，上报打印机列表
+ * 3. 接收并执行命令（检测USB、添加打印机、打印）
+ * 4. 心跳保活，断线重连
+ * 
+ * 使用方法：
+ * php printer_client.php
+ * 
+ * 建议使用 systemd 或 supervisor 管理进程
+ */
+
+// ============ 配置 ============
+// TODO: 修改为你的服务器地址
+$WS_SERVER = 'ws://xinprint.zyshare.top:8089';  // WebSocket 服务器地址
+$RECONNECT_INTERVAL = 5;  // 重连间隔（秒）
+$HEARTBEAT_INTERVAL = 30; // 心跳间隔（秒）
+
+// ============ 获取设备唯一ID ============
+function getDeviceId(): string
+{
+    // 使用 machine-id 的 MD5
+    $machineId = @file_get_contents('/etc/machine-id');
+    if ($machineId) {
+        return md5(trim($machineId));
+    }
+    
+    throw new Exception('未找到 /etc/machine-id');
+}
+
+// ============ 获取系统信息 ============
+function getSystemInfo(): array
+{
+    $info = [
+        'hostname' => gethostname(),
+        'os' => php_uname('s') . ' ' . php_uname('r'),
+        'arch' => php_uname('m'),
+        'php_version' => PHP_VERSION,
+    ];
+    
+    // 获取IP地址
+    $ip = shell_exec("hostname -I 2>/dev/null | awk '{print \$1}'");
+    if ($ip) {
+        $info['ip'] = trim($ip);
+    }
+    
+    return $info;
+}
+
+// ============ 获取CUPS打印机列表 ============
+function getPrinterList(): array
+{
+    $printers = [];
+    
+    // 方法1: 使用 lpstat -a 获取接受任务的打印机
+    $output = [];
+    exec('LANG=C lpstat -a 2>&1', $output);  // 强制英文输出
+    echo "[getPrinterList] lpstat -a 输出: " . implode(' | ', $output) . "\n";
+    
+    foreach ($output as $line) {
+        // 匹配英文 "accepting" 或中文 "接受"
+        if (preg_match('/^(\S+)\s+(accepting|接受)/', $line, $m)) {
+            $printers[$m[1]] = ['name' => $m[1], 'uri' => '', 'is_default' => false];
+        }
+    }
+    
+    // 方法2: 如果 lpstat -a 没结果，尝试 lpstat -p
+    if (empty($printers)) {
+        $output2 = [];
+        exec('LANG=C lpstat -p 2>&1', $output2);  // 强制英文输出
+        echo "[getPrinterList] lpstat -p 输出: " . implode(' | ', $output2) . "\n";
+        
+        foreach ($output2 as $line) {
+            // 匹配英文 "printer" 或中文 "打印机"
+            if (preg_match('/^(printer|打印机)\s+(\S+)/', $line, $m)) {
+                $name = $m[2];
+                $printers[$name] = ['name' => $name, 'uri' => '', 'is_default' => false];
+            }
+        }
+    }
+    
+    // 方法3: 直接读取 CUPS 配置
+    if (empty($printers)) {
+        $cupsDir = '/etc/cups/ppd/';
+        if (is_dir($cupsDir)) {
+            $files = glob($cupsDir . '*.ppd');
+            foreach ($files as $file) {
+                $name = basename($file, '.ppd');
+                $printers[$name] = ['name' => $name, 'uri' => '', 'is_default' => false];
+            }
+            echo "[getPrinterList] 从PPD目录找到: " . implode(', ', array_keys($printers)) . "\n";
+        }
+    }
+    
+    // 获取默认打印机
+    $defaultOutput = [];
+    exec('lpstat -d 2>&1', $defaultOutput);
+    $defaultPrinter = '';
+    if (preg_match('/system default destination:\s*(\S+)/', implode('', $defaultOutput), $m)) {
+        $defaultPrinter = $m[1];
+    }
+    
+    // 获取打印机URI
+    $uriOutput = [];
+    exec('LANG=C lpstat -v 2>&1', $uriOutput);
+    echo "[getPrinterList] lpstat -v 输出: " . implode(' | ', $uriOutput) . "\n";
+    
+    foreach ($uriOutput as $line) {
+        // 匹配英文 "device for xxx:" 或中文 "xxx 的设备"
+        if (preg_match('/device for (\S+):\s*(.+)/i', $line, $m)) {
+            $name = rtrim($m[1], ':');
+            $uri = trim($m[2]);
+            if (isset($printers[$name])) {
+                $printers[$name]['uri'] = $uri;
+                $printers[$name]['is_default'] = ($name === $defaultPrinter);
+            } else {
+                $printers[$name] = [
+                    'name' => $name,
+                    'uri' => $uri,
+                    'is_default' => ($name === $defaultPrinter)
+                ];
+            }
+        }
+        // 中文格式: "xxx 的设备：usb://..."
+        elseif (preg_match('/^(\S+)\s+的设备[：:]\s*(.+)/', $line, $m)) {
+            $name = trim($m[1]);
+            $uri = trim($m[2]);
+            if (isset($printers[$name])) {
+                $printers[$name]['uri'] = $uri;
+                $printers[$name]['is_default'] = ($name === $defaultPrinter);
+            } else {
+                $printers[$name] = [
+                    'name' => $name,
+                    'uri' => $uri,
+                    'is_default' => ($name === $defaultPrinter)
+                ];
+            }
+        }
+    }
+    
+    echo "[getPrinterList] 最终找到 " . count($printers) . " 台打印机\n";
+    
+    return array_values($printers);
+}
+
+// ============ 检测USB打印机 ============
+function detectUsbPrinters(): array
+{
+    echo "[detectUsbPrinters] 开始检测...\n";
+    
+    $result = [
+        'usb_devices' => [],
+        'drivers' => []
+    ];
+    
+    // 检测USB设备
+    $usbOutput = [];
+    exec('lpinfo -v 2>/dev/null', $usbOutput);
+    foreach ($usbOutput as $line) {
+        if (strpos($line, 'usb://') !== false) {
+            if (preg_match('/(usb:\/\/\S+)/', $line, $m)) {
+                $uri = trim($m[1]);
+                // 解析品牌和型号
+                if (preg_match('/usb:\/\/([^\/]+)\/([^?]+)/', $uri, $pm)) {
+                    $result['usb_devices'][] = [
+                        'uri' => $uri,
+                        'brand' => urldecode($pm[1]),
+                        'model' => urldecode($pm[2])
+                    ];
+                }
+            }
+        }
+    }
+    echo "[detectUsbPrinters] 找到 " . count($result['usb_devices']) . " 个USB设备\n";
+    
+    // 查询检测到设备对应的驱动
+    if (!empty($result['usb_devices'])) {
+        $brand = $result['usb_devices'][0]['brand'];
+        $model = $result['usb_devices'][0]['model'];
+        $brandLower = strtolower($brand);
+        $modelLower = strtolower($model);
+        
+        // 提取型号关键字（如 SCX-4x21 -> scx4x21, scx, 4x21）
+        $modelClean = preg_replace('/[^a-z0-9]/i', '', $model);
+        $modelParts = preg_split('/[-_\s]+/', $model);
+        
+        echo "[detectUsbPrinters] 品牌: $brand, 型号: $model\n";
+        echo "[detectUsbPrinters] 关键字: $modelClean, 部分: " . implode(',', $modelParts) . "\n";
+        
+        // 获取所有该品牌的驱动
+        $allDrivers = [];
+        exec("LANG=C lpinfo -m 2>/dev/null | grep -i " . escapeshellarg($brandLower), $allDrivers);
+        
+        $matchedDrivers = [];
+        $brandOnlyDrivers = [];
+        
+        foreach ($allDrivers as $line) {
+            if (!preg_match('/^(\S+)\s+(.+)/', $line, $m)) continue;
+            
+            $ppd = trim($m[1]);
+            $name = trim($m[2]);
+            $nameLower = strtolower($name);
+            $ppdLower = strtolower($ppd);
+            
+            $score = 0;
+            
+            // 完整型号匹配（最高分）
+            if (stripos($nameLower, $modelClean) !== false || stripos($ppdLower, $modelClean) !== false) {
+                $score = 100;
+            }
+            // 型号各部分匹配
+            else {
+                foreach ($modelParts as $part) {
+                    $partClean = preg_replace('/[^a-z0-9]/i', '', $part);
+                    if (strlen($partClean) >= 2) {
+                        if (stripos($nameLower, $partClean) !== false || stripos($ppdLower, $partClean) !== false) {
+                            $score += 30;
+                        }
+                    }
+                }
+            }
+            
+            // 品牌匹配加分
+            if (stripos($nameLower, $brandLower) !== false) {
+                $score += 10;
+            }
+            
+            if ($score >= 30) {
+                $matchedDrivers[] = ['ppd' => $ppd, 'name' => $name, 'score' => $score];
+            } else if ($score >= 10) {
+                $brandOnlyDrivers[] = ['ppd' => $ppd, 'name' => $name, 'score' => $score];
+            }
+        }
+        
+        // 按分数排序
+        usort($matchedDrivers, function($a, $b) { return $b['score'] - $a['score']; });
+        usort($brandOnlyDrivers, function($a, $b) { return $b['score'] - $a['score']; });
+        
+        // 添加匹配的驱动（最多10个）
+        $count = 0;
+        foreach ($matchedDrivers as $d) {
+            if ($count >= 10) break;
+            $result['drivers'][] = ['ppd' => $d['ppd'], 'name' => $d['name'] . ' ★'];
+            $count++;
+        }
+        
+        // 如果匹配的不够，添加品牌驱动（最多5个）
+        if ($count < 5) {
+            foreach ($brandOnlyDrivers as $d) {
+                if ($count >= 10) break;
+                $result['drivers'][] = ['ppd' => $d['ppd'], 'name' => $d['name']];
+                $count++;
+            }
+        }
+        
+        echo "[detectUsbPrinters] 匹配到 " . count($matchedDrivers) . " 个精确驱动, " . count($brandOnlyDrivers) . " 个品牌驱动\n";
+    }
+    
+    // 最后添加通用驱动作为备选
+    $result['drivers'][] = ['ppd' => 'everywhere', 'name' => 'IPP Everywhere (通用)'];
+    $result['drivers'][] = ['ppd' => 'raw', 'name' => 'Raw Queue (原始-不推荐)'];
+    
+    echo "[detectUsbPrinters] 找到 " . count($result['drivers']) . " 个驱动\n";
+    
+    return $result;
+}
+
+// ============ 添加打印机到CUPS ============
+function addPrinter(string $name, string $uri, string $driver): array
+{
+    // 清理名称：只保留字母、数字、下划线、横线
+    $name = preg_replace('/[^a-zA-Z0-9_-]/', '_', $name);
+    $name = preg_replace('/_+/', '_', $name); // 合并多个下划线
+    $name = trim($name, '_'); // 去掉首尾下划线
+    if (empty($name)) {
+        $name = 'Printer_' . time();
+    }
+    
+    echo "[addPrinter] 原始名称: $name\n";
+    echo "[addPrinter] 清理后名称: $name, URI: $uri, 驱动: $driver\n";
+    
+    // 验证 URI 格式
+    if (empty($uri) || strpos($uri, '://') === false) {
+        return ['success' => false, 'message' => '无效的打印机URI'];
+    }
+    
+    // 先尝试删除同名打印机（如果存在）
+    exec('lpadmin -x ' . escapeshellarg($name) . ' 2>/dev/null');
+    
+    // 构建命令 - 分步执行
+    // 1. 先添加打印机（不启用）
+    $cmd1 = sprintf(
+        'lpadmin -p %s -v %s -m %s 2>&1',
+        escapeshellarg($name),
+        escapeshellarg($uri),
+        escapeshellarg($driver)
+    );
+    
+    echo "[addPrinter] 执行命令1: $cmd1\n";
+    exec($cmd1, $output1, $returnCode1);
+    echo "[addPrinter] 返回码1: $returnCode1, 输出: " . implode(' ', $output1) . "\n";
+    
+    if ($returnCode1 !== 0) {
+        // 尝试使用 raw 驱动
+        echo "[addPrinter] 尝试使用 raw 驱动...\n";
+        $cmd2 = sprintf(
+            'lpadmin -p %s -v %s -m raw 2>&1',
+            escapeshellarg($name),
+            escapeshellarg($uri)
+        );
+        exec($cmd2, $output2, $returnCode2);
+        echo "[addPrinter] 返回码2: $returnCode2, 输出: " . implode(' ', $output2) . "\n";
+        
+        if ($returnCode2 !== 0) {
+            return ['success' => false, 'message' => '添加失败: ' . implode("\n", array_merge($output1, $output2))];
+        }
+    }
+    
+    // 2. 启用打印机
+    exec("lpadmin -p " . escapeshellarg($name) . " -E 2>&1", $enableOutput);
+    exec("cupsenable " . escapeshellarg($name) . " 2>&1");
+    exec("cupsaccept " . escapeshellarg($name) . " 2>&1");
+    
+    // 验证打印机是否添加成功
+    exec("lpstat -p " . escapeshellarg($name) . " 2>&1", $checkOutput, $checkCode);
+    
+    if ($checkCode === 0) {
+        return ['success' => true, 'message' => "打印机 $name 添加成功"];
+    } else {
+        return ['success' => false, 'message' => '添加失败: 打印机未能正确配置'];
+    }
+}
+
+// ============ 删除打印机 ============
+function removePrinter(string $name): array
+{
+    exec('lpadmin -x ' . escapeshellarg($name) . ' 2>&1', $output, $returnCode);
+    
+    if ($returnCode === 0) {
+        return ['success' => true, 'message' => "打印机 $name 已删除"];
+    } else {
+        return ['success' => false, 'message' => '删除失败: ' . implode("\n", $output)];
+    }
+}
+
+// ============ 测试打印 ============
+function testPrint(string $printerName): array
+{
+    echo "[testPrint] 开始测试打印: $printerName\n";
+    
+    // 创建测试页内容（使用UTF-8编码）
+    $testContent = "
+========================================
+        Print Test Page
+========================================
+
+Printer: $printerName
+Time: " . date('Y-m-d H:i:s') . "
+Device: " . getDeviceId() . "
+
+If you can see this page,
+the printer is configured correctly!
+
+========================================
+";
+    
+    // 保存临时文件
+    $tmpFile = '/tmp/test_print_' . time() . '.txt';
+    file_put_contents($tmpFile, $testContent);
+    
+    // 执行打印（添加编码选项）
+    $cmd = sprintf('lp -d %s -o cpi=12 -o lpi=7 %s 2>&1',
+        escapeshellarg($printerName),
+        escapeshellarg($tmpFile)
+    );
+    
+    echo "[testPrint] 执行命令: $cmd\n";
+    exec($cmd, $output, $returnCode);
+    echo "[testPrint] 返回码: $returnCode, 输出: " . implode(' ', $output) . "\n";
+    
+    // 清理临时文件
+    @unlink($tmpFile);
+    
+    if ($returnCode === 0) {
+        return ['success' => true, 'message' => '测试页已发送到打印队列'];
+    } else {
+        return ['success' => false, 'message' => '打印失败: ' . implode("\n", $output)];
+    }
+}
+
+// ============ 执行打印任务 ============
+function executePrint(string $printerName, string $fileContent, string $filename, string $fileExt, int $copies = 1): array
+{
+    // 保存临时文件
+    $tmpDir = '/tmp/print_jobs/';
+    if (!is_dir($tmpDir)) {
+        mkdir($tmpDir, 0755, true);
+    }
+    
+    $tmpFile = $tmpDir . uniqid('print_') . '.' . $fileExt;
+    $decoded = base64_decode($fileContent);
+    
+    if ($decoded === false) {
+        return ['success' => false, 'message' => '文件解码失败'];
+    }
+    
+    file_put_contents($tmpFile, $decoded);
+    
+    // 根据文件类型处理
+    $ext = strtolower($fileExt);
+    $success = false;
+    $output = [];
+    
+    try {
+        if ($ext === 'pdf') {
+            // PDF打印 - 使用 lp 的 fit-to-page 选项自适应A4
+            $cmd = sprintf('lp -d %s -n %d -o fit-to-page -o media=A4 %s 2>&1',
+                escapeshellarg($printerName),
+                $copies,
+                escapeshellarg($tmpFile)
+            );
+            exec($cmd, $output, $ret);
+            $success = ($ret === 0);
+            
+        } elseif (in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'bmp'])) {
+            // 图片打印 - 自适应A4页面
+            $cmd = sprintf('lp -d %s -n %d -o fit-to-page -o media=A4 %s 2>&1',
+                escapeshellarg($printerName),
+                $copies,
+                escapeshellarg($tmpFile)
+            );
+            exec($cmd, $output, $ret);
+            $success = ($ret === 0);
+            
+        } elseif (in_array($ext, ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'txt'])) {
+            // 使用 LibreOffice 转换
+            putenv('HOME=/tmp');
+            $pdf = $tmpDir . pathinfo($tmpFile, PATHINFO_FILENAME) . '.pdf';
+            
+            exec('timeout 60 libreoffice --headless --convert-to pdf --outdir ' . 
+                escapeshellarg($tmpDir) . ' ' . escapeshellarg($tmpFile) . ' 2>&1', $cvtOutput, $cvtRet);
+            
+            if (file_exists($pdf)) {
+                // 转换后的PDF也使用fit-to-page选项
+                $cmd = sprintf('lp -d %s -n %d -o fit-to-page -o media=A4 %s 2>&1',
+                    escapeshellarg($printerName),
+                    $copies,
+                    escapeshellarg($pdf)
+                );
+                exec($cmd, $output, $ret);
+                $success = ($ret === 0);
+                @unlink($pdf);
+            } else {
+                $output = ['LibreOffice 转换失败'];
+            }
+        } else {
+            // 尝试直接打印
+            $cmd = sprintf('lp -d %s -n %d %s 2>&1',
+                escapeshellarg($printerName),
+                $copies,
+                escapeshellarg($tmpFile)
+            );
+            exec($cmd, $output, $ret);
+            $success = ($ret === 0);
+        }
+    } finally {
+        @unlink($tmpFile);
+    }
+    
+    return [
+        'success' => $success,
+        'message' => $success ? '打印任务已提交' : ('打印失败: ' . implode('; ', $output))
+    ];
+}
+
+// ============ WebSocket 客户端类 ============
+class PrinterClient
+{
+    private $socket;
+    private $deviceId;
+    private $serverUrl;
+    private $connected = false;
+    private $lastHeartbeat = 0;
+    private $messageBuffer = '';  // 消息缓冲区
+    
+    public function __construct(string $serverUrl)
+    {
+        $this->serverUrl = $serverUrl;
+        $this->deviceId = getDeviceId();
+        echo "设备ID: {$this->deviceId}\n";
+    }
+    
+    /**
+     * 连接到服务器
+     */
+    public function connect(): bool
+    {
+        $urlParts = parse_url($this->serverUrl);
+        $host = $urlParts['host'];
+        $port = $urlParts['port'] ?? 80;
+        $path = $urlParts['path'] ?? '/';
+        
+        $this->socket = @stream_socket_client(
+            "tcp://{$host}:{$port}",
+            $errno,
+            $errstr,
+            10
+        );
+        
+        if (!$this->socket) {
+            echo "连接失败: $errstr ($errno)\n";
+            return false;
+        }
+        
+        // WebSocket 握手
+        $key = base64_encode(random_bytes(16));
+        $headers = "GET $path HTTP/1.1\r\n" .
+                   "Host: {$host}:{$port}\r\n" .
+                   "Upgrade: websocket\r\n" .
+                   "Connection: Upgrade\r\n" .
+                   "Sec-WebSocket-Key: {$key}\r\n" .
+                   "Sec-WebSocket-Version: 13\r\n\r\n";
+        
+        fwrite($this->socket, $headers);
+        
+        // 读取响应
+        $response = '';
+        while (($line = fgets($this->socket)) !== false) {
+            $response .= $line;
+            if ($line === "\r\n") break;
+        }
+        
+        if (strpos($response, '101') === false) {
+            echo "WebSocket 握手失败\n";
+            fclose($this->socket);
+            return false;
+        }
+        
+        stream_set_blocking($this->socket, false);
+        $this->connected = true;
+        echo "已连接到服务器\n";
+        
+        // 注册设备
+        $this->register();
+        
+        return true;
+    }
+    
+    /**
+     * 注册设备
+     */
+    private function register()
+    {
+        $systemInfo = getSystemInfo();
+        
+        // 注册设备 - 首次注册时openid为空，需要用户扫码绑定
+        // 如果已有绑定的openid，从本地配置读取
+        $openid = $this->loadOpenid();
+        
+        $this->send([
+            'action' => 'register',
+            'device_id' => $this->deviceId,
+            'openid' => $openid,  // 首次为空，等待用户扫码绑定
+            'name' => $systemInfo['hostname'] ?? '',
+            'version' => '1.0.0',
+            'os_info' => $systemInfo['os'] ?? ''
+        ]);
+        
+        // 上报打印机列表 - 使用 printers_update
+        $printers = getPrinterList();
+        $formattedPrinters = [];
+        foreach ($printers as $p) {
+            $formattedPrinters[] = [
+                'name' => $p['name'],
+                'display_name' => $p['name'],
+                'driver' => '',
+                'is_default' => $p['is_default'] ?? false,
+                'status' => 'ready'
+            ];
+        }
+        
+        $this->send([
+            'action' => 'printers_update',
+            'printers' => $formattedPrinters
+        ]);
+    }
+    
+    /**
+     * 加载已绑定的openid
+     */
+    private function loadOpenid(): string
+    {
+        $configFile = '/etc/printer-client-openid';
+        if (file_exists($configFile)) {
+            return trim(file_get_contents($configFile));
+        }
+        return '';
+    }
+    
+    /**
+     * 保存绑定的openid
+     */
+    public function saveOpenid(string $openid): void
+    {
+        file_put_contents('/etc/printer-client-openid', $openid);
+    }
+    
+    /**
+     * 发送消息
+     */
+    public function send(array $data)
+    {
+        if (!$this->connected) return;
+        
+        $json = json_encode($data, JSON_UNESCAPED_UNICODE);
+        $frame = $this->encodeFrame($json);
+        fwrite($this->socket, $frame);
+    }
+    
+    /**
+     * 编码 WebSocket 帧
+     */
+    private function encodeFrame(string $data): string
+    {
+        $length = strlen($data);
+        $frame = chr(0x81); // 文本帧
+        
+        if ($length <= 125) {
+            $frame .= chr($length | 0x80);
+        } elseif ($length <= 65535) {
+            $frame .= chr(126 | 0x80) . pack('n', $length);
+        } else {
+            $frame .= chr(127 | 0x80) . pack('J', $length);
+        }
+        
+        // 添加掩码
+        $mask = random_bytes(4);
+        $frame .= $mask;
+        
+        for ($i = 0; $i < $length; $i++) {
+            $frame .= $data[$i] ^ $mask[$i % 4];
+        }
+        
+        return $frame;
+    }
+    
+    /**
+     * 解码 WebSocket 帧
+     */
+    private function decodeFrame(string $data): ?string
+    {
+        if (strlen($data) < 2) return null;
+        
+        $firstByte = ord($data[0]);
+        $secondByte = ord($data[1]);
+        
+        $opcode = $firstByte & 0x0F;
+        $masked = ($secondByte & 0x80) !== 0;
+        $length = $secondByte & 0x7F;
+        
+        $offset = 2;
+        
+        if ($length === 126) {
+            $length = unpack('n', substr($data, 2, 2))[1];
+            $offset = 4;
+        } elseif ($length === 127) {
+            // 兼容32位PHP：使用两个32位整数
+            $highBytes = unpack('N', substr($data, 2, 4))[1];
+            $lowBytes = unpack('N', substr($data, 6, 4))[1];
+            // 对于实际使用场景，高位通常为0，直接使用低位
+            $length = ($highBytes > 0) ? PHP_INT_MAX : $lowBytes;
+            $offset = 10;
+        }
+        
+        if ($masked) {
+            $mask = substr($data, $offset, 4);
+            $offset += 4;
+        }
+        
+        $payload = substr($data, $offset, $length);
+        
+        if ($masked) {
+            for ($i = 0; $i < strlen($payload); $i++) {
+                $payload[$i] = $payload[$i] ^ $mask[$i % 4];
+            }
+        }
+        
+        return $payload;
+    }
+    
+    /**
+     * 主循环
+     */
+    public function run()
+    {
+        global $HEARTBEAT_INTERVAL;
+        
+        while (true) {
+            if (!$this->connected) {
+                $this->reconnect();
+                continue;
+            }
+            
+            // 读取消息
+            $data = @fread($this->socket, 65535);
+            if ($data === false || feof($this->socket)) {
+                echo "连接断开\n";
+                $this->connected = false;
+                continue;
+            }
+            
+            if ($data) {
+                $message = $this->decodeFrame($data);
+                if ($message) {
+                    // 将消息添加到缓冲区
+                    $this->messageBuffer .= $message;
+                    
+                    // 尝试解析完整的JSON
+                    $decoded = @json_decode($this->messageBuffer, true);
+                    if ($decoded !== null) {
+                        echo "[DEBUG] 完整消息接收完成，总长度: " . strlen($this->messageBuffer) . " 字节\n";
+                        $this->handleMessage($this->messageBuffer);
+                        $this->messageBuffer = '';  // 清空缓冲区
+                    }
+                    // 如果还有数据要接收，不等待，继续读取
+                    continue;
+                }
+            }
+            
+            // 心跳
+            if (time() - $this->lastHeartbeat >= $HEARTBEAT_INTERVAL) {
+                $this->send(['action' => 'heartbeat']);
+                $this->lastHeartbeat = time();
+            }
+            
+            // 短暂等待
+            usleep(50000); // 50ms
+        }
+    }
+    
+    /**
+     * 处理收到的消息
+     */
+    private function handleMessage(string $message)
+    {
+        $data = json_decode($message, true);
+        if (!$data) {
+            echo "[handleMessage] JSON解析失败: " . substr($message, 0, 100) . "\n";
+            return;
+        }
+        
+        $action = $data['action'] ?? 'unknown';
+        echo "收到命令: " . $action . "\n";
+        
+        // 调试：显示所有字段
+        if ($action === 'print') {
+            echo "[handleMessage] print命令字段: " . implode(', ', array_keys($data)) . "\n";
+        }
+        
+        switch ($data['action'] ?? '') {
+            case 'registered':
+                echo "设备注册成功\n";
+                break;
+            
+            case 'register_ok':
+                echo "设备注册成功\n";
+                break;
+                
+            case 'bind':
+                // 用户扫码绑定设备
+                $openid = $data['openid'] ?? '';
+                if (!empty($openid)) {
+                    $this->saveOpenid($openid);
+                    echo "设备已绑定到用户: $openid\n";
+                    // 重新注册以更新openid
+                    $this->register();
+                }
+                break;
+                
+            case 'heartbeat_ack':
+                // 心跳响应
+                break;
+                
+            case 'pong':
+                // 心跳响应
+                break;
+                
+            case 'detect_usb':
+                // 检测USB打印机
+                echo "[detect_usb] 开始执行检测...\n";
+                try {
+                    $result = detectUsbPrinters();
+                    echo "[detect_usb] 检测完成，发送结果...\n";
+                    $this->send([
+                        'action' => 'detect_result',
+                        'request_id' => $data['request_id'] ?? '',
+                        'usb_devices' => $result['usb_devices'],
+                        'drivers' => $result['drivers']
+                    ]);
+                    echo "[detect_usb] 结果已发送\n";
+                } catch (\Exception $e) {
+                    echo "[detect_usb] 错误: " . $e->getMessage() . "\n";
+                }
+                break;
+                
+            case 'add_printer':
+                // 添加打印机
+                $printerUri = $data['uri'] ?? '';
+                $result = addPrinter(
+                    $data['name'] ?? 'Printer',
+                    $printerUri,
+                    $data['driver'] ?? 'everywhere'
+                );
+                $this->send([
+                    'action' => 'add_printer_result',
+                    'request_id' => $data['request_id'] ?? '',
+                    'success' => $result['success'],
+                    'message' => $result['message']
+                ]);
+                // 更新打印机列表（等待1秒让CUPS更新）
+                sleep(1);
+                $printerList = getPrinterList();
+                // 如果URI为空，用添加时的URI补充
+                foreach ($printerList as &$p) {
+                    if (empty($p['uri']) && $result['success']) {
+                        $p['uri'] = $printerUri;
+                    }
+                }
+                $this->send([
+                    'action' => 'printer_list',
+                    'printers' => $printerList
+                ]);
+                break;
+                
+            case 'remove_printer':
+                // 删除打印机
+                $result = removePrinter($data['name'] ?? '');
+                $this->send([
+                    'action' => 'remove_printer_result',
+                    'request_id' => $data['request_id'] ?? '',
+                    'success' => $result['success'],
+                    'message' => $result['message']
+                ]);
+                // 更新打印机列表
+                $this->send([
+                    'action' => 'printer_list',
+                    'printers' => getPrinterList()
+                ]);
+                break;
+                
+            case 'print':
+                // 执行打印
+                $printer = $data['printer'] ?? $data['printer_name'] ?? '';
+                $fileContent = $data['file_content'] ?? '';
+                $fileUrl = $data['file_url'] ?? '';
+                $filename = $data['filename'] ?? $data['file_name'] ?? 'document';
+                $fileExt = $data['file_ext'] ?? pathinfo($filename, PATHINFO_EXTENSION) ?: 'pdf';
+                $copies = $data['copies'] ?? 1;
+                $taskId = $data['task_id'] ?? $data['job_id'] ?? '';
+                
+                echo "[print] 打印机: $printer, 文件: $filename, 扩展名: $fileExt, 份数: $copies\n";
+                
+                // 如果有URL，从URL下载文件
+                if (!empty($fileUrl) && empty($fileContent)) {
+                    echo "[print] 从URL下载文件: $fileUrl\n";
+                    $downloadedContent = @file_get_contents($fileUrl);
+                    if ($downloadedContent !== false) {
+                        $fileContent = base64_encode($downloadedContent);
+                        echo "[print] 下载成功，大小: " . strlen($downloadedContent) . " 字节\n";
+                    } else {
+                        echo "[print] 下载失败\n";
+                    }
+                }
+                
+                echo "[print] 文件内容长度: " . strlen($fileContent) . " 字节\n";
+                
+                if (empty($printer)) {
+                    echo "[print] 错误: 打印机名称为空\n";
+                    $result = ['success' => false, 'message' => '打印机名称为空'];
+                } elseif (empty($fileContent)) {
+                    echo "[print] 错误: 文件内容为空\n";
+                    $result = ['success' => false, 'message' => '文件内容为空'];
+                } else {
+                    $result = executePrint($printer, $fileContent, $filename, $fileExt, $copies);
+                }
+                
+                echo "[print] 结果: " . ($result['success'] ? '成功' : '失败') . " - " . $result['message'] . "\n";
+                
+                $this->send([
+                    'action' => 'print_result',
+                    'task_id' => $taskId,
+                    'job_id' => $taskId,
+                    'success' => $result['success'],
+                    'message' => $result['message']
+                ]);
+                break;
+                
+            case 'refresh_printers':
+                // 刷新打印机列表
+                $this->send([
+                    'action' => 'printer_list',
+                    'printers' => getPrinterList()
+                ]);
+                break;
+            
+            case 'test_print':
+                // 测试打印
+                $printer = $data['printer'] ?? '';
+                $requestId = $data['request_id'] ?? '';
+                echo "[test_print] 打印机: $printer\n";
+                
+                $result = testPrint($printer);
+                $this->send([
+                    'action' => 'test_print_result',
+                    'request_id' => $requestId,
+                    'success' => $result['success'],
+                    'message' => $result['message']
+                ]);
+                break;
+                
+            case 'error':
+                echo "服务器错误: " . ($data['message'] ?? '') . "\n";
+                break;
+        }
+    }
+    
+    /**
+     * 重连
+     */
+    private function reconnect()
+    {
+        global $RECONNECT_INTERVAL;
+        
+        echo "尝试重连...\n";
+        if ($this->socket) {
+            @fclose($this->socket);
+        }
+        
+        sleep($RECONNECT_INTERVAL);
+        $this->connect();
+    }
+    
+    /**
+     * 获取设备ID
+     */
+    public function getDeviceId(): string
+    {
+        return $this->deviceId;
+    }
+}
+
+// ============ 主程序 ============
+$deviceId = getDeviceId();
+$qrContent = "device://{$deviceId}";
+
+echo "========================================\n";
+echo "  打印机客户端\n";
+echo "========================================\n";
+echo "服务器: $WS_SERVER\n";
+echo "设备ID: $deviceId\n";
+echo "启动时间: " . date('Y-m-d H:i:s') . "\n";
+echo "----------------------------------------\n";
+echo "二维码内容: $qrContent\n";
+echo "----------------------------------------\n";
+
+// 尝试在终端显示二维码
+$qrCmd = "command -v qrencode > /dev/null 2>&1 && qrencode -t ANSI '$qrContent' 2>/dev/null";
+$qrOutput = shell_exec($qrCmd);
+if ($qrOutput) {
+    echo "\n扫描下方二维码绑定设备:\n";
+    echo $qrOutput;
+    echo "\n";
+} else {
+    echo "\n提示: 安装 qrencode 可在终端显示二维码\n";
+    echo "  sudo apt install qrencode\n\n";
+}
+
+$client = new PrinterClient($WS_SERVER);
+
+if ($client->connect()) {
+    $client->run();
+} else {
+    echo "初始连接失败，将持续重试...\n";
+    while (true) {
+        sleep($RECONNECT_INTERVAL);
+        if ($client->connect()) {
+            $client->run();
+        }
+    }
+}
