@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================
-# WebSocket 打印客户端一键安装配置脚本
+#         打印客户端一键安装配置脚本
 # 适用于: Debian/Ubuntu/Armbian 系统
 # 功能: 检查环境、安装依赖、配置打印服务
 # ============================================
@@ -182,17 +182,20 @@ install_cups() {
     systemctl enable cups
     systemctl start cups
     
-    # 配置CUPS允许远程管理（可选）
+    # 配置CUPS（从远程拉取配置文件）
     if [ -f /etc/cups/cupsd.conf ]; then
         # 备份配置
         cp /etc/cups/cupsd.conf /etc/cups/cupsd.conf.bak
         
-        # 允许本地网络访问
-        if ! grep -q "Allow @LOCAL" /etc/cups/cupsd.conf; then
-            print_msg "配置 CUPS 允许本地网络访问..."
-            sed -i 's/Listen localhost:631/Listen 0.0.0.0:631/' /etc/cups/cupsd.conf
-            sed -i '/<Location \/>/,/<\/Location>/s/Order allow,deny/Order allow,deny\n  Allow @LOCAL/' /etc/cups/cupsd.conf
+        # 从远程下载cupsd.conf配置文件
+        print_msg "从远程下载 CUPS 配置文件..."
+        CUPSD_CONF_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/configs/cupsd.conf"
+        if curl -sSL -o /etc/cups/cupsd.conf "$CUPSD_CONF_URL"; then
+            print_msg "CUPS 配置文件下载成功"
             systemctl restart cups
+        else
+            print_warn "CUPS 配置文件下载失败，恢复备份..."
+            cp /etc/cups/cupsd.conf.bak /etc/cups/cupsd.conf
         fi
     fi
     
@@ -295,7 +298,7 @@ download_files() {
     print_msg "文件下载完成"
 }
 
-# 安装WebSocket客户端（兼容旧函数名）
+# 安装客户端（兼容旧函数名）
 install_websocket_client() {
     download_files
 }
@@ -521,7 +524,7 @@ show_summary() {
     
     echo ""
     echo "============================================"
-    echo "  WebSocket 打印客户端安装完成!"
+    echo "            打印客户端安装完成!"
     echo "============================================"
     echo ""
     echo "安装目录: $INSTALL_DIR"
@@ -545,7 +548,7 @@ show_summary() {
 
 # 卸载函数
 uninstall() {
-    print_step "卸载 WebSocket 打印客户端"
+    print_step "卸载打印客户端"
     
     read -p "确定要卸载吗? [y/N]: " CONFIRM
     if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
@@ -574,7 +577,7 @@ uninstall() {
 show_menu() {
     echo ""
     echo "============================================"
-    echo "  WebSocket 打印客户端安装脚本"
+    echo "            打印客户端安装脚本"
     echo "============================================"
     echo ""
     echo "  1. 完整安装 (推荐)"
