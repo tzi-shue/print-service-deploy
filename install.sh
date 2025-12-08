@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================
-#         打印客户端一键安装配置脚本
+# WebSocket 打印客户端一键安装配置脚本
 # 适用于: Debian/Ubuntu/Armbian 系统
 # 功能: 检查环境、安装依赖、配置打印服务
 # ============================================
@@ -298,7 +298,7 @@ download_files() {
     print_msg "文件下载完成"
 }
 
-# 安装客户端（兼容旧函数名）
+# 安装WebSocket客户端（兼容旧函数名）
 install_websocket_client() {
     download_files
 }
@@ -308,18 +308,23 @@ configure_server() {
     print_msg "服务器配置已内置，无需手动配置"
 }
 
+# 获取设备ID（基于machine-id）
+get_device_id() {
+    if [ -f /etc/machine-id ]; then
+        cat /etc/machine-id | md5sum | cut -d' ' -f1
+    else
+        print_error "未找到 /etc/machine-id"
+        exit 1
+    fi
+}
+
 # 显示设备ID信息
 configure_device_id() {
     print_step "设备ID信息"
     
-    # 设备ID由printer_client.php自动生成（基于machine-id的MD5）
-    if [ -f /etc/machine-id ]; then
-        DEVICE_ID=$(cat /etc/machine-id | md5sum | cut -d' ' -f1)
-        print_msg "设备ID: $DEVICE_ID"
-        print_msg "（基于 /etc/machine-id 自动生成）"
-    else
-        print_msg "设备ID将在首次运行时自动生成"
-    fi
+    DEVICE_ID=$(get_device_id)
+    print_msg "设备ID: $DEVICE_ID"
+    print_msg "（基于 /etc/machine-id 生成）"
 }
 
 # 创建systemd服务
@@ -467,8 +472,8 @@ generate_qrcode() {
         return
     fi
     
-    # 获取设备ID
-    DEVICE_ID=$(grep -oP "private \\\$deviceId = '\K[^']+" "$INSTALL_DIR/printer_client.php" 2>/dev/null || echo "")
+    # 获取设备ID（使用与printer_client.php一致的逻辑）
+    DEVICE_ID=$(get_device_id)
     
     if [ -z "$DEVICE_ID" ]; then
         print_error "无法获取设备ID"
@@ -524,7 +529,7 @@ show_summary() {
     
     echo ""
     echo "============================================"
-    echo "            打印客户端安装完成!"
+    echo "  WebSocket 打印客户端安装完成!"
     echo "============================================"
     echo ""
     echo "安装目录: $INSTALL_DIR"
@@ -548,7 +553,7 @@ show_summary() {
 
 # 卸载函数
 uninstall() {
-    print_step "卸载打印客户端"
+    print_step "卸载 WebSocket 打印客户端"
     
     read -p "确定要卸载吗? [y/N]: " CONFIRM
     if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
@@ -577,7 +582,7 @@ uninstall() {
 show_menu() {
     echo ""
     echo "============================================"
-    echo "            打印客户端安装脚本"
+    echo "  WebSocket 打印客户端安装脚本"
     echo "============================================"
     echo ""
     echo "  1. 完整安装 (推荐)"
