@@ -532,7 +532,6 @@ show_summary() {
     echo "  WebSocket 打印客户端安装完成!"
     echo "============================================"
     echo ""
-    echo "安装目录: $INSTALL_DIR"
     echo "日志文件: $LOG_FILE"
     echo "服务名称: $SERVICE_NAME"
     echo ""
