@@ -330,15 +330,15 @@ get_device_id() {
         fi
     fi
 
-    # 2. 如果文件不存在或ID无效，则生成新的ID
-    # 尝试获取CPU序列号作为设备ID
+    # 2. 仅使用CPU序列号作为设备ID（严格模式，无CPU序列号则报错）
     CPU_SERIAL=$(grep -m 1 "Serial" /proc/cpuinfo 2>/dev/null | cut -d":" -f2 | tr -d '[:space:]')
-    if [ -n "$CPU_SERIAL" ] && [ "$CPU_SERIAL" != "0000000000000000" ]; then
-        DEVICE_ID=$(echo "cpu:$CPU_SERIAL" | md5sum | cut -d' ' -f1)
-    else
-        # 如果无法获取CPU序列号，使用随机ID
-        DEVICE_ID=$(cat /proc/sys/kernel/random/uuid | md5sum | cut -d' ' -f1)
+    
+    if [ -z "$CPU_SERIAL" ] || [ "$CPU_SERIAL" = "0000000000000000" ]; then
+        echo "错误：无法获取有效的CPU序列号，无法生成设备ID" >&2
+        return 1
     fi
+
+    DEVICE_ID=$(echo "cpu:$CPU_SERIAL" | md5sum | cut -d' ' -f1)
 
     # 3. 保存设备ID到文件
     echo "$DEVICE_ID" > /etc/printer-device-id
@@ -351,8 +351,13 @@ configure_device_id() {
     print_step "设备ID信息"
     
     DEVICE_ID=$(get_device_id)
+    if [ $? -ne 0 ]; then
+        print_error "设备ID生成失败：无法获取有效的CPU序列号"
+        return 1
+    fi
+    
     print_msg "设备ID: $DEVICE_ID"
-    print_msg "（基于CPU序列号或随机生成）"
+    print_msg "（基于CPU序列号生成）"
 }
 
 # 创建systemd服务
