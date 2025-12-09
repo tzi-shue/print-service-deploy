@@ -49,7 +49,32 @@ function getDeviceId(): string
         }
     }
 
-    // 4. 如果以上硬件特征都获取不到，生成一个随机ID并写入文件
+    // 4. 如果没有主板序列号，尝试硬盘UUID
+    if (empty($deviceId)) {
+        // 获取第一个磁盘的UUID
+        $diskUuid = trim(@shell_exec('blkid -o value -s UUID $(lsblk -no NAME | grep -v "NAME" | head -1) 2>/dev/null') ?: '');
+        if (!empty($diskUuid)) {
+            $deviceId = md5('disk:' . $diskUuid);
+        }
+    }
+
+    // 5. 如果没有硬盘UUID，尝试BIOS序列号
+    if (empty($deviceId)) {
+        $biosSerial = trim(@file_get_contents('/sys/class/dmi/id/bios_serial') ?: '');
+        if (!empty($biosSerial) && !in_array($biosSerial, ['None', 'Default string', 'To Be Filled By O.E.M.'], true)) {
+            $deviceId = md5('bios:' . $biosSerial);
+        }
+    }
+
+    // 6. 如果没有BIOS序列号，尝试系统熵源
+    if (empty($deviceId)) {
+        $entropy = trim(@file_get_contents('/proc/sys/kernel/random/uuid') ?: '');
+        if (!empty($entropy)) {
+            $deviceId = md5('entropy:' . $entropy);
+        }
+    }
+
+    // 7. 如果以上硬件特征都获取不到，生成一个随机ID并写入文件
     if (empty($deviceId)) {
         $random = bin2hex(random_bytes(16));
         $deviceId = md5('rand:' . $random . ':' . microtime(true));
