@@ -50,28 +50,6 @@ function getDeviceId(): string
     return $deviceId;
 }
 
-    // 极端情况：所有特征都获取不到，使用系统熵源作为后备
-    $entropy = trim(@file_get_contents('/proc/sys/kernel/random/uuid') ?: '');
-    if (!empty($entropy)) {
-        return md5('entropy:' . $entropy);
-    }
-
-    // 最终手段：完全随机ID
-    $random = bin2hex(random_bytes(16));
-    return md5('rand:' . $random . ':' . microtime(true));
-}
-
-    // 极端情况：所有特征都获取不到，使用系统熵源作为后备
-    $entropy = trim(@file_get_contents('/proc/sys/kernel/random/uuid') ?: '');
-    if (!empty($entropy)) {
-        return md5('entropy:' . $entropy);
-    }
-
-    // 最终手段：完全随机ID
-    $random = bin2hex(random_bytes(16));
-    return md5('rand:' . $random . ':' . microtime(true));
-}
-
 function getSystemInfo(): array
 {
     $info = [
