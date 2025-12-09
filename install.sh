@@ -308,14 +308,44 @@ configure_server() {
     print_msg "服务器配置已内置，无需手动配置"
 }
 
-# 获取设备ID（基于machine-id）
+# 获取设备ID（确保唯一性）
 get_device_id() {
-    if [ -f /etc/machine-id ]; then
-        cat /etc/machine-id | md5sum | cut -d' ' -f1
-    else
-        print_error "未找到 /etc/machine-id"
-        exit 1
+    # 优先使用已保存的设备ID（确保重启后ID不变）
+    if [ -f /etc/printer-device-id ]; then
+        cat /etc/printer-device-id
+        return
     fi
+    
+    # 生成新的唯一设备ID
+    # 组合多个因素: machine-id + MAC地址 + CPU信息 + 随机数
+    local machine_id=""
+    local mac_addr=""
+    local cpu_info=""
+    local random_part=""
+    
+    # 获取 machine-id
+    if [ -f /etc/machine-id ]; then
+        machine_id=$(cat /etc/machine-id)
+    fi
+    
+    # 获取第一个非回环网卡的MAC地址
+    mac_addr=$(ip link show | grep -m1 'link/ether' | awk '{print $2}' 2>/dev/null || echo "")
+    
+    # 获取CPU序列号或其他硬件信息
+    cpu_info=$(cat /proc/cpuinfo | grep -m1 'Serial\|model name' | awk -F: '{print $2}' 2>/dev/null | tr -d ' ' || echo "")
+    
+    # 生成随机部分（确保即使其他信息相同也能唯一）
+    random_part=$(head -c 16 /dev/urandom | md5sum | cut -d' ' -f1)
+    
+    # 组合所有因素生成设备ID
+    local combined="${machine_id}${mac_addr}${cpu_info}${random_part}"
+    local device_id=$(echo -n "$combined" | md5sum | cut -d' ' -f1)
+    
+    # 保存设备ID到文件（确保重启后ID不变）
+    echo "$device_id" > /etc/printer-device-id
+    chmod 644 /etc/printer-device-id
+    
+    echo "$device_id"
 }
 
 # 显示设备ID信息
@@ -324,7 +354,7 @@ configure_device_id() {
     
     DEVICE_ID=$(get_device_id)
     print_msg "设备ID: $DEVICE_ID"
-    print_msg "（基于 /etc/machine-id 生成）"
+    print_msg "（已保存到 /etc/printer-device-id）"
 }
 
 # 创建systemd服务
@@ -577,6 +607,44 @@ uninstall() {
     print_msg "卸载完成"
 }
 
+# 重新生成设备ID（解决ID冲突问题）
+regenerate_device_id() {
+    print_step "重新生成设备ID"
+    
+    if [ -f /etc/printer-device-id ]; then
+        OLD_ID=$(cat /etc/printer-device-id)
+        print_msg "当前设备ID: $OLD_ID"
+        echo ""
+        read -p "确定要重新生成设备ID吗? 这将导致需要重新绑定设备 [y/N]: " CONFIRM
+        if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
+            print_msg "取消操作"
+            return
+        fi
+        rm -f /etc/printer-device-id
+    fi
+    
+    # 生成新ID
+    NEW_ID=$(get_device_id)
+    print_msg "新设备ID: $NEW_ID"
+    print_msg "设备ID已保存到 /etc/printer-device-id"
+    
+    # 重启服务
+    if systemctl is-active --quiet $SERVICE_NAME; then
+        print_msg "重启服务..."
+        systemctl restart $SERVICE_NAME
+    fi
+    
+    echo ""
+    print_warn "请在小程序中重新扫码绑定此设备"
+    
+    # 生成新二维码
+    echo ""
+    read -p "是否生成新的设备二维码? [Y/n]: " GEN_QR
+    if [ "$GEN_QR" != "n" ] && [ "$GEN_QR" != "N" ]; then
+        generate_qrcode
+    fi
+}
+
 # 主菜单
 show_menu() {
     echo ""
@@ -591,10 +659,11 @@ show_menu() {
     echo "  5. 添加打印机"
     echo "  6. 生成设备二维码"
     echo "  7. 查看服务状态"
-    echo "  8. 卸载"
+    echo "  8. 重新生成设备ID (解决ID冲突)"
+    echo "  9. 卸载"
     echo "  0. 退出"
     echo ""
-    read -p "请选择 [0-8]: " MENU_CHOICE
+    read -p "请选择 [0-9]: " MENU_CHOICE
     
     case $MENU_CHOICE in
         1)
@@ -637,6 +706,10 @@ show_menu() {
             tail -20 $LOG_FILE 2>/dev/null || echo "(无日志)"
             ;;
         8)
+            check_root
+            regenerate_device_id
+            ;;
+        9)
             check_root
             uninstall
             ;;
