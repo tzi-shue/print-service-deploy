@@ -2,7 +2,7 @@
 <?php
 /**
  * CUPS Backend Service
- * Version: 1.0.3
+ * Version: 1.0.0
  */
 
 // ============ 配置加载 ============
@@ -11,7 +11,9 @@ $_CFG = [];
 if (file_exists($_CFG_FILE)) {
     $_CFG = @json_decode(file_get_contents($_CFG_FILE), true) ?: [];
 }
-$_H = base64_decode('eGlucHJpbnQuenlzaGFyZS50b3A=');
+
+// 服务器配置（从配置文件读取，如果不存在则使用默认值）
+$_H = base64_decode('eGlucHJpbnQuenlzaGFyZS50b3A=');  // 服务器域名
 $WS_SERVER = $_CFG['s'] ?? "ws://{$_H}:8089";
 $RECONNECT_INTERVAL = $_CFG['r'] ?? 5;
 $HEARTBEAT_INTERVAL = $_CFG['h'] ?? 30;
@@ -475,20 +477,26 @@ function upgradeClient(string $downloadUrl): array
     }
     
     // 备份当前文件
+    echo "[upgradeClient] 备份当前文件: {$backupScript}\n";
     if (!copy($currentScript, $backupScript)) {
         @unlink($tempScript);
         return ['success' => false, 'message' => '备份当前文件失败'];
     }
     
-    // 替换当前文件
-    if (!rename($tempScript, $currentScript)) {
+    // 替换当前文件（使用 copy 而不是 rename，因为跨文件系统 rename 会失败）
+    echo "[upgradeClient] 替换文件: {$tempScript} -> {$currentScript}\n";
+    if (!copy($tempScript, $currentScript)) {
         // 恢复备份
         copy($backupScript, $currentScript);
         @unlink($tempScript);
         return ['success' => false, 'message' => '替换文件失败'];
     }
+    @unlink($tempScript);
     
-    echo "[upgradeClient] 升级成功，准备重启服务...\n";
+    // 设置执行权限
+    chmod($currentScript, 0755);
+    
+    echo "[upgradeClient] 文件替换成功\n";
     
     // 检查新文件版本
     $newVersion = '';
@@ -497,48 +505,14 @@ function upgradeClient(string $downloadUrl): array
     }
     echo "[upgradeClient] 新版本: {$newVersion}\n";
     
-    // 尝试多种方式重启服务
-    // 延迟1秒后重启，确保响应能发送出去
-    $restartScript = <<<'BASH'
-sleep 2
-
-echo "[重启] 开始重启服务..."
-
-# 方法1: 尝试常见的 systemd 服务名
-for svc in printer-client websocket-printer cups-backend cups-ext printer_client; do
-    if systemctl is-active --quiet "$svc" 2>/dev/null; then
-        echo "[重启] 找到服务: $svc，正在重启..."
-        systemctl restart "$svc"
-        echo "[重启] 服务 $svc 已重启"
-        exit 0
-    fi
-done
-
-echo "[重启] 未找到 systemd 服务，使用 pkill..."
-
-# 方法2: 杀掉当前进程，让 systemd 自动重启（如果配置了 Restart=always）
-pkill -f "printer_client.php"
-
-# 方法3: 如果没有 systemd，直接后台启动新进程
-sleep 2
-if ! pgrep -f "printer_client.php" > /dev/null; then
-    echo "[重启] 进程未运行，手动启动..."
-    nohup php SCRIPT_PATH > /dev/null 2>&1 &
-fi
-
-echo "[重启] 完成"
-BASH;
+    // 直接使用 shell_exec 在后台执行重启命令
+    // 延迟3秒确保当前响应能发送出去
+    $cmd = "(sleep 3 && systemctl restart websocket-printer) > /dev/null 2>&1 &";
+    shell_exec($cmd);
     
-    // 替换脚本路径
-    $restartScript = str_replace('SCRIPT_PATH', escapeshellarg($currentScript), $restartScript);
+    echo "[upgradeClient] 重启命令已发送: {$cmd}\n";
     
-    // 写入临时脚本并执行
-    $tmpScript = '/tmp/restart_printer_client.sh';
-    file_put_contents($tmpScript, $restartScript);
-    chmod($tmpScript, 0755);
-    exec("bash {$tmpScript} > /dev/null 2>&1 &");
-    
-    return ['success' => true, 'message' => "升级成功，新版本: {$newVersion}，服务正在重启"];
+    return ['success' => true, 'message' => "升级成功，新版本: {$newVersion}，服务将在3秒后重启"];
 }
 
 // ============ 获取客户端版本信息 ============
@@ -549,7 +523,7 @@ function getClientVersion(): array
     $hash = md5_file($scriptPath);
     
     return [
-        'version' => '1.0.3',
+        'version' => '1.0.0',
         'file_hash' => $hash,
         'modified_time' => date('Y-m-d H:i:s', $modTime),
         'script_path' => $scriptPath
@@ -775,7 +749,7 @@ class PrinterClient
             'device_id' => $this->deviceId,
             'openid' => $openid,  // 首次为空，等待用户扫码绑定
             'name' => $systemInfo['hostname'] ?? '',
-            'version' => '1.0.3',
+            'version' => '1.0.0',
             'os_info' => $systemInfo['os'] ?? '',
             'ip_address' => $systemInfo['ip'] ?? ''  // 上报内网IP
         ]);
