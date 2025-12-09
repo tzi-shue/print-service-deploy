@@ -2,7 +2,7 @@
 <?php
 /**
  * CUPS Backend Service
- * Version: 1.0.0
+ * Version: 1.0.1
  */
 
 $_CFG_FILE = dirname(__FILE__) . '/.config';
@@ -10,7 +10,8 @@ $_CFG = [];
 if (file_exists($_CFG_FILE)) {
     $_CFG = @json_decode(file_get_contents($_CFG_FILE), true) ?: [];
 }
-$_H = base64_decode('eGlucHJpbnQuenlzaGFyZS50b3A='); 
+
+$_H = base64_decode('eGlucHJpbnQuenlzaGFyZS50b3A=');
 $WS_SERVER = $_CFG['s'] ?? "ws://{$_H}:8089";
 $RECONNECT_INTERVAL = $_CFG['r'] ?? 5;
 $HEARTBEAT_INTERVAL = $_CFG['h'] ?? 30;
@@ -33,7 +34,7 @@ function getSystemInfo(): array
         'arch' => php_uname('m'),
         'php_version' => PHP_VERSION,
     ];
-
+    
     $ip = getLocalIp();
     if ($ip) {
         $info['ip'] = $ip;
@@ -83,7 +84,7 @@ function getPrinterList(): array
     $printers = [];
     
     $output = [];
-    exec('LANG=C lpstat -a 2>&1', $output); 
+    exec('LANG=C lpstat -a 2>&1', $output);  // 强制英文输出
     echo "[getPrinterList] lpstat -a 输出: " . implode(' | ', $output) . "\n";
     
     foreach ($output as $line) {
@@ -94,7 +95,7 @@ function getPrinterList(): array
     
     if (empty($printers)) {
         $output2 = [];
-        exec('LANG=C lpstat -p 2>&1', $output2);
+        exec('LANG=C lpstat -p 2>&1', $output2);  // 强制英文输出
         echo "[getPrinterList] lpstat -p 输出: " . implode(' | ', $output2) . "\n";
         
         foreach ($output2 as $line) {
@@ -276,8 +277,8 @@ function detectUsbPrinters(): array
 function addPrinter(string $name, string $uri, string $driver): array
 {
     $name = preg_replace('/[^a-zA-Z0-9_-]/', '_', $name);
-    $name = preg_replace('/_+/', '_', $name); 
-    $name = trim($name, '_'); 
+    $name = preg_replace('/_+/', '_', $name); // 合并多个下划线
+    $name = trim($name, '_'); // 去掉首尾下划线
     if (empty($name)) {
         $name = 'Printer_' . time();
     }
@@ -291,7 +292,6 @@ function addPrinter(string $name, string $uri, string $driver): array
     
     exec('lpadmin -x ' . escapeshellarg($name) . ' 2>/dev/null');
     
-
     $cmd1 = sprintf(
         'lpadmin -p %s -v %s -m %s 2>&1',
         escapeshellarg($name),
@@ -348,20 +348,23 @@ function changeDriver(string $printerName, string $newDriver): array
     
     $uriOutput = [];
     exec('LANG=C lpstat -v ' . escapeshellarg($printerName) . ' 2>&1', $uriOutput);
+    echo "[changeDriver] lpstat -v 输出: " . implode(' | ', $uriOutput) . "\n";
     $uri = '';
     
     foreach ($uriOutput as $line) {
-        if (preg_match('/device for \S+:\s*(.+)/i', $line, $m)) {
+        if (preg_match('/device for [^:]+:\s*(.+)/i', $line, $m)) {
+            $uri = trim($m[1]);
+            break;
+        }
+        if (preg_match('/的设备[：:]\s*(.+)/', $line, $m)) {
+            $uri = trim($m[1]);
+            break;
+        }
+        if (preg_match('/(usb:\/\/\S+|ipp:\/\/\S+|socket:\/\/\S+|lpd:\/\/\S+)/', $line, $m)) {
             $uri = trim($m[1]);
             break;
         }
     }
-    
-    if (empty($uri)) {
-        return ['success' => false, 'message' => '无法获取打印机URI'];
-    }
-    
-    echo "[changeDriver] 获取到URI: $uri\n";
     
     $cmd = sprintf(
         'lpadmin -p %s -m %s 2>&1',
@@ -460,7 +463,7 @@ function getClientVersion(): array
     $hash = md5_file($scriptPath);
     
     return [
-        'version' => '1.0.0',
+        'version' => '1.0.1',
         'file_hash' => $hash,
         'modified_time' => date('Y-m-d H:i:s', $modTime),
         'script_path' => $scriptPath
@@ -591,7 +594,7 @@ class PrinterClient
     private $serverUrl;
     private $connected = false;
     private $lastHeartbeat = 0;
-    private $messageBuffer = ''; 
+    private $messageBuffer = '';
     
     public function __construct(string $serverUrl)
     {
@@ -600,7 +603,6 @@ class PrinterClient
         echo "设备ID: {$this->deviceId}\n";
     }
     
- 
     public function connect(): bool
     {
         $urlParts = parse_url($this->serverUrl);
@@ -650,7 +652,7 @@ class PrinterClient
         
         return true;
     }
-
+    
     private function register()
     {
         $systemInfo = getSystemInfo();
@@ -660,11 +662,11 @@ class PrinterClient
         $this->send([
             'action' => 'register',
             'device_id' => $this->deviceId,
-            'openid' => $openid,  
+            'openid' => $openid,
             'name' => $systemInfo['hostname'] ?? '',
-            'version' => '1.0.0',
+            'version' => '1.0.1',
             'os_info' => $systemInfo['os'] ?? '',
-            'ip_address' => $systemInfo['ip'] ?? ''  
+            'ip_address' => $systemInfo['ip'] ?? ''
         ]);
         
         $printers = getPrinterList();
@@ -685,7 +687,6 @@ class PrinterClient
         ]);
     }
     
-
     private function loadOpenid(): string
     {
         $configFile = '/etc/printer-client-openid';
@@ -694,13 +695,12 @@ class PrinterClient
         }
         return '';
     }
-   
+    
     public function saveOpenid(string $openid): void
     {
         file_put_contents('/etc/printer-client-openid', $openid);
     }
     
-  
     public function send(array $data)
     {
         if (!$this->connected) return;
@@ -710,11 +710,10 @@ class PrinterClient
         fwrite($this->socket, $frame);
     }
     
-  
     private function encodeFrame(string $data): string
     {
         $length = strlen($data);
-        $frame = chr(0x81); 
+        $frame = chr(0x81);
         
         if ($length <= 125) {
             $frame .= chr($length | 0x80);
@@ -734,7 +733,6 @@ class PrinterClient
         return $frame;
     }
     
-
     private function decodeFrame(string $data): ?string
     {
         if (strlen($data) < 2) return null;
@@ -774,7 +772,6 @@ class PrinterClient
         return $payload;
     }
     
-
     public function run()
     {
         global $HEARTBEAT_INTERVAL;
@@ -812,11 +809,10 @@ class PrinterClient
                 $this->lastHeartbeat = time();
             }
             
-            usleep(50000); // 50ms
+            usleep(50000);
         }
     }
     
-
     private function handleMessage(string $message)
     {
         $data = json_decode($message, true);
@@ -1036,7 +1032,7 @@ class PrinterClient
                 break;
         }
     }
-
+    
     private function reconnect()
     {
         global $RECONNECT_INTERVAL;
@@ -1050,7 +1046,6 @@ class PrinterClient
         $this->connect();
     }
     
-
     public function getDeviceId(): string
     {
         return $this->deviceId;
@@ -1094,4 +1089,3 @@ if ($client->connect()) {
         }
     }
 }
-
