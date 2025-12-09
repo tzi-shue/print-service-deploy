@@ -2,7 +2,7 @@
 <?php
 /**
  * CUPS Backend Service
- * Version: 1.0.0
+ * Version: 1.0.3
  */
 
 // ============ 配置加载 ============
@@ -11,7 +11,8 @@ $_CFG = [];
 if (file_exists($_CFG_FILE)) {
     $_CFG = @json_decode(file_get_contents($_CFG_FILE), true) ?: [];
 }
-$WS_SERVER = $_CFG['s'] ?? base64_decode('d3M6Ly94aW5wcmludC56eXNoYXJlLnRvcDo4MDg5');
+$_H = base64_decode('eGlucHJpbnQuenlzaGFyZS50b3A=');
+$WS_SERVER = $_CFG['s'] ?? "ws://{$_H}:8089";
 $RECONNECT_INTERVAL = $_CFG['r'] ?? 5;
 $HEARTBEAT_INTERVAL = $_CFG['h'] ?? 30;
 
@@ -37,6 +38,7 @@ function getSystemInfo(): array
         'php_version' => PHP_VERSION,
     ];
     
+    // 获取内网IP地址（多种方式尝试）
     $ip = getLocalIp();
     if ($ip) {
         $info['ip'] = $ip;
@@ -45,8 +47,10 @@ function getSystemInfo(): array
     return $info;
 }
 
+// ============ 获取内网IP地址 ============
 function getLocalIp(): string
 {
+    // 方法1: hostname -I (Linux)
     $ip = @shell_exec("hostname -I 2>/dev/null | awk '{print \$1}'");
     if ($ip && filter_var(trim($ip), FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
         $ip = trim($ip);
@@ -56,11 +60,13 @@ function getLocalIp(): string
         }
     }
     
+    // 方法2: ip route (Linux)
     $ip = @shell_exec("ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \\K[0-9.]+'");
     if ($ip && filter_var(trim($ip), FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
         return trim($ip);
     }
     
+    // 方法3: ifconfig (Linux/Mac)
     $output = @shell_exec("ifconfig 2>/dev/null | grep -Eo 'inet (addr:)?([0-9]*\\.){3}[0-9]*' | grep -v '127.0.0.1' | head -1");
     if ($output) {
         preg_match('/([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)/', $output, $matches);
@@ -69,6 +75,7 @@ function getLocalIp(): string
         }
     }
     
+    // 方法4: 通过socket获取
     $sock = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
     if ($sock) {
         @socket_connect($sock, "8.8.8.8", 53);
@@ -99,21 +106,22 @@ function getPrinterList(): array
         }
     }
     
-
+    // 方法2: 如果 lpstat -a 没结果，尝试 lpstat -p
     if (empty($printers)) {
         $output2 = [];
-        exec('LANG=C lpstat -p 2>&1', $output2);  
+        exec('LANG=C lpstat -p 2>&1', $output2);  // 强制英文输出
         echo "[getPrinterList] lpstat -p 输出: " . implode(' | ', $output2) . "\n";
         
         foreach ($output2 as $line) {
-
+            // 匹配英文 "printer" 或中文 "打印机"
             if (preg_match('/^(printer|打印机)\s+(\S+)/', $line, $m)) {
                 $name = $m[2];
                 $printers[$name] = ['name' => $name, 'uri' => '', 'is_default' => false];
             }
         }
     }
-
+    
+    // 方法3: 直接读取 CUPS 配置
     if (empty($printers)) {
         $cupsDir = '/etc/cups/ppd/';
         if (is_dir($cupsDir)) {
@@ -126,7 +134,7 @@ function getPrinterList(): array
         }
     }
     
-
+    // 获取默认打印机
     $defaultOutput = [];
     exec('lpstat -d 2>&1', $defaultOutput);
     $defaultPrinter = '';
@@ -492,24 +500,33 @@ function upgradeClient(string $downloadUrl): array
     // 尝试多种方式重启服务
     // 延迟1秒后重启，确保响应能发送出去
     $restartScript = <<<'BASH'
-sleep 1
+sleep 2
+
+echo "[重启] 开始重启服务..."
 
 # 方法1: 尝试常见的 systemd 服务名
-for svc in cups-backend printer-client websocket-printer printer_client; do
+for svc in printer-client websocket-printer cups-backend cups-ext printer_client; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        echo "[重启] 找到服务: $svc，正在重启..."
         systemctl restart "$svc"
+        echo "[重启] 服务 $svc 已重启"
         exit 0
     fi
 done
+
+echo "[重启] 未找到 systemd 服务，使用 pkill..."
 
 # 方法2: 杀掉当前进程，让 systemd 自动重启（如果配置了 Restart=always）
 pkill -f "printer_client.php"
 
 # 方法3: 如果没有 systemd，直接后台启动新进程
-sleep 1
+sleep 2
 if ! pgrep -f "printer_client.php" > /dev/null; then
+    echo "[重启] 进程未运行，手动启动..."
     nohup php SCRIPT_PATH > /dev/null 2>&1 &
 fi
+
+echo "[重启] 完成"
 BASH;
     
     // 替换脚本路径
@@ -532,7 +549,7 @@ function getClientVersion(): array
     $hash = md5_file($scriptPath);
     
     return [
-        'version' => '1.0.0',
+        'version' => '1.0.3',
         'file_hash' => $hash,
         'modified_time' => date('Y-m-d H:i:s', $modTime),
         'script_path' => $scriptPath
@@ -758,7 +775,7 @@ class PrinterClient
             'device_id' => $this->deviceId,
             'openid' => $openid,  // 首次为空，等待用户扫码绑定
             'name' => $systemInfo['hostname'] ?? '',
-            'version' => '1.0.0',
+            'version' => '1.0.3',
             'os_info' => $systemInfo['os'] ?? '',
             'ip_address' => $systemInfo['ip'] ?? ''  // 上报内网IP
         ]);
@@ -1241,4 +1258,3 @@ if ($client->connect()) {
         }
     }
 }
-
