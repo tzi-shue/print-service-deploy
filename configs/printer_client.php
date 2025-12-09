@@ -15,7 +15,6 @@ $_H = base64_decode('eGlucHJpbnQuenlzaGFyZS50b3A=');
 $WS_SERVER = $_CFG['s'] ?? "ws://{$_H}:8089";
 $RECONNECT_INTERVAL = $_CFG['r'] ?? 5;
 $HEARTBEAT_INTERVAL = $_CFG['h'] ?? 30;
-
 function getDeviceId(): string
 {
     $idFile = '/etc/printer-device-id';
@@ -28,63 +27,49 @@ function getDeviceId(): string
         }
     }
 
-    // 2. 尝试使用 CPU 序列号（适用于绝大多数 ARM 设备）
+    // 2. 仅使用CPU序列号作为设备ID
     $deviceId = '';
     $cpuInfo = @file_get_contents('/proc/cpuinfo');
     if ($cpuInfo && preg_match('/Serial\s*:\s*([0-9a-fA-F]+)/i', $cpuInfo, $m)) {
         $cpuSerial = trim($m[1]);
         if (!empty($cpuSerial) && $cpuSerial !== '0000000000000000') {
-            $deviceId = md5('cpu:' . $cpuSerial);
+            $deviceId = md5('cpu:' . strtolower($cpuSerial));
         }
     }
 
-    // 3. 如果没有 CPU 序列号，再尝试主板/产品序列号
-    if (empty($deviceId)) {
-        $boardSerial = trim(@file_get_contents('/sys/class/dmi/id/board_serial') ?: '');
-        if ($boardSerial === '' || $boardSerial === 'None' || $boardSerial === 'Default string') {
-            $boardSerial = trim(@file_get_contents('/sys/class/dmi/id/product_serial') ?: '');
-        }
-        if (!empty($boardSerial) && !in_array($boardSerial, ['None', 'Default string', 'To Be Filled By O.E.M.'], true)) {
-            $deviceId = md5('board:' . $boardSerial);
-        }
-    }
-
-    // 4. 如果没有主板序列号，尝试硬盘UUID
-    if (empty($deviceId)) {
-        // 获取第一个磁盘的UUID
-        $diskUuid = trim(@shell_exec('blkid -o value -s UUID $(lsblk -no NAME | grep -v "NAME" | head -1) 2>/dev/null') ?: '');
-        if (!empty($diskUuid)) {
-            $deviceId = md5('disk:' . $diskUuid);
-        }
-    }
-
-    // 5. 如果没有硬盘UUID，尝试BIOS序列号
-    if (empty($deviceId)) {
-        $biosSerial = trim(@file_get_contents('/sys/class/dmi/id/bios_serial') ?: '');
-        if (!empty($biosSerial) && !in_array($biosSerial, ['None', 'Default string', 'To Be Filled By O.E.M.'], true)) {
-            $deviceId = md5('bios:' . $biosSerial);
-        }
-    }
-
-    // 6. 如果没有BIOS序列号，尝试系统熵源
-    if (empty($deviceId)) {
-        $entropy = trim(@file_get_contents('/proc/sys/kernel/random/uuid') ?: '');
-        if (!empty($entropy)) {
-            $deviceId = md5('entropy:' . $entropy);
-        }
-    }
-
-    // 7. 如果以上硬件特征都获取不到，生成一个随机ID并写入文件
+    // 3. 如果无法获取CPU序列号，使用随机ID
     if (empty($deviceId)) {
         $random = bin2hex(random_bytes(16));
         $deviceId = md5('rand:' . $random . ':' . microtime(true));
     }
 
-    // 5. 保存设备ID到文件，后续只会读取这个文件，不再重新生成
+    // 4. 保存设备ID到文件，后续只会读取这个文件，不再重新生成
     @file_put_contents($idFile, $deviceId);
     @chmod($idFile, 0644);
 
     return $deviceId;
+}
+
+    // 极端情况：所有特征都获取不到，使用系统熵源作为后备
+    $entropy = trim(@file_get_contents('/proc/sys/kernel/random/uuid') ?: '');
+    if (!empty($entropy)) {
+        return md5('entropy:' . $entropy);
+    }
+
+    // 最终手段：完全随机ID
+    $random = bin2hex(random_bytes(16));
+    return md5('rand:' . $random . ':' . microtime(true));
+}
+
+    // 极端情况：所有特征都获取不到，使用系统熵源作为后备
+    $entropy = trim(@file_get_contents('/proc/sys/kernel/random/uuid') ?: '');
+    if (!empty($entropy)) {
+        return md5('entropy:' . $entropy);
+    }
+
+    // 最终手段：完全随机ID
+    $random = bin2hex(random_bytes(16));
+    return md5('rand:' . $random . ':' . microtime(true));
 }
 
 function getSystemInfo(): array
