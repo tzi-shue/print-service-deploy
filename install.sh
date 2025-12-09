@@ -308,65 +308,13 @@ configure_server() {
     print_msg "服务器配置已内置，无需手动配置"
 }
 
-# 获取设备ID（唯一且固定不变，与 printer_client.php 保持一致）
+# 获取设备ID（由 printer_client.php 生成，这里只读取显示）
 get_device_id() {
-    # 优先使用已保存的设备ID
     if [ -f /etc/printer-device-id ]; then
         cat /etc/printer-device-id
-        return
+    else
+        echo "待生成"
     fi
-    
-    # 使用PHP生成设备ID，确保与 printer_client.php 完全一致
-    local device_id=$(php -r '
-        $cpuSerial = "";
-        $diskSerial = "";
-        $boardSerial = "";
-        $macAddr = "";
-        
-        // 1. CPU序列号
-        $cpuInfo = @file_get_contents("/proc/cpuinfo");
-        if ($cpuInfo && preg_match("/Serial\s*:\s*(\S+)/i", $cpuInfo, $m)) {
-            $cpuSerial = trim($m[1]);
-        }
-        
-        // 2. 磁盘序列号
-        $diskSerial = trim(@shell_exec("lsblk -o SERIAL -n 2>/dev/null | grep -v \"^$\" | head -1") ?: "");
-        if (empty($diskSerial)) {
-            $diskId = trim(@shell_exec("ls -la /dev/disk/by-id/ 2>/dev/null | grep -v \"part\|wwn\" | head -2 | tail -1 | awk \"{print \\\$NF}\" | xargs basename 2>/dev/null") ?: "");
-            if (!empty($diskId)) {
-                $diskSerial = $diskId;
-            }
-        }
-        
-        // 3. 主板序列号
-        $boardSerial = trim(@file_get_contents("/sys/class/dmi/id/board_serial") ?: "");
-        if (empty($boardSerial)) {
-            $boardSerial = trim(@file_get_contents("/sys/class/dmi/id/product_serial") ?: "");
-        }
-        
-        // 4. MAC地址
-        $macAddr = trim(@shell_exec("ip link show | grep -m1 \"link/ether\" | awk \"{print \\\$2}\"") ?: "");
-        
-        $combined = $cpuSerial . $diskSerial . $boardSerial . $macAddr;
-        
-        if (empty($combined)) {
-            echo "error";
-            exit(1);
-        }
-        
-        echo md5($combined);
-    ')
-    
-    if [ "$device_id" = "error" ] || [ -z "$device_id" ]; then
-        print_error "无法获取硬件特征，请手动创建 /etc/printer-device-id"
-        exit 1
-    fi
-    
-    # 保存设备ID到文件
-    echo "$device_id" > /etc/printer-device-id
-    chmod 644 /etc/printer-device-id
-    
-    echo "$device_id"
 }
 
 # 显示设备ID信息
@@ -374,8 +322,11 @@ configure_device_id() {
     print_step "设备ID信息"
     
     DEVICE_ID=$(get_device_id)
-    print_msg "设备ID: $DEVICE_ID"
-    print_msg "（已保存到 /etc/printer-device-id）"
+    if [ "$DEVICE_ID" = "待生成" ]; then
+        print_msg "设备ID将在服务首次启动时自动生成"
+    else
+        print_msg "设备ID: $DEVICE_ID"
+    fi
 }
 
 # 创建systemd服务
