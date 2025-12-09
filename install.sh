@@ -308,40 +308,56 @@ configure_server() {
     print_msg "服务器配置已内置，无需手动配置"
 }
 
-# 获取设备ID（确保唯一性）
+# 获取设备ID（唯一且固定不变）
 get_device_id() {
-    # 优先使用已保存的设备ID（确保重启后ID不变）
+    # 优先使用已保存的设备ID
     if [ -f /etc/printer-device-id ]; then
         cat /etc/printer-device-id
         return
     fi
     
-    # 生成新的唯一设备ID
-    # 组合多个因素: machine-id + MAC地址 + CPU信息 + 随机数
-    local machine_id=""
-    local mac_addr=""
-    local cpu_info=""
-    local random_part=""
+    # 基于硬件特征生成唯一且固定的设备ID
+    # 组合多个硬件因素，确保：
+    # 1. 同一设备永远生成相同ID
+    # 2. 不同设备生成不同ID（即使是克隆的系统）
     
-    # 获取 machine-id
-    if [ -f /etc/machine-id ]; then
-        machine_id=$(cat /etc/machine-id)
+    local cpu_serial=""
+    local disk_serial=""
+    local mac_addr=""
+    local board_serial=""
+    
+    # 1. CPU序列号（树莓派等ARM设备有唯一序列号）
+    cpu_serial=$(cat /proc/cpuinfo | grep -i 'Serial' | awk -F: '{print $2}' | tr -d ' ' 2>/dev/null || echo "")
+    
+    # 2. 磁盘/存储设备序列号（每个硬盘/SD卡唯一）
+    disk_serial=$(lsblk -o SERIAL -n 2>/dev/null | grep -v '^$' | head -1 || echo "")
+    if [ -z "$disk_serial" ]; then
+        # 尝试从 /dev/disk/by-id 获取
+        disk_serial=$(ls -la /dev/disk/by-id/ 2>/dev/null | grep -v 'part\|wwn' | head -2 | tail -1 | awk '{print $NF}' | xargs basename 2>/dev/null || echo "")
     fi
     
-    # 获取第一个非回环网卡的MAC地址
+    # 3. 主板序列号
+    board_serial=$(cat /sys/class/dmi/id/board_serial 2>/dev/null || echo "")
+    if [ -z "$board_serial" ]; then
+        board_serial=$(cat /sys/class/dmi/id/product_serial 2>/dev/null || echo "")
+    fi
+    
+    # 4. MAC地址（作为备选，但可能被克隆）
     mac_addr=$(ip link show | grep -m1 'link/ether' | awk '{print $2}' 2>/dev/null || echo "")
     
-    # 获取CPU序列号或其他硬件信息
-    cpu_info=$(cat /proc/cpuinfo | grep -m1 'Serial\|model name' | awk -F: '{print $2}' 2>/dev/null | tr -d ' ' || echo "")
+    # 组合所有硬件特征
+    local combined="${cpu_serial}${disk_serial}${board_serial}${mac_addr}"
     
-    # 生成随机部分（确保即使其他信息相同也能唯一）
-    random_part=$(head -c 16 /dev/urandom | md5sum | cut -d' ' -f1)
+    # 如果所有硬件特征都为空，报错
+    if [ -z "$combined" ]; then
+        print_error "无法获取硬件特征，请手动创建 /etc/printer-device-id"
+        exit 1
+    fi
     
-    # 组合所有因素生成设备ID
-    local combined="${machine_id}${mac_addr}${cpu_info}${random_part}"
+    # 生成设备ID
     local device_id=$(echo -n "$combined" | md5sum | cut -d' ' -f1)
     
-    # 保存设备ID到文件（确保重启后ID不变）
+    # 保存设备ID到文件
     echo "$device_id" > /etc/printer-device-id
     chmod 644 /etc/printer-device-id
     
@@ -607,15 +623,25 @@ uninstall() {
     print_msg "卸载完成"
 }
 
-# 重新生成设备ID（解决ID冲突问题）
+# 重新生成设备ID（基于硬件特征重新计算）
 regenerate_device_id() {
     print_step "重新生成设备ID"
+    
+    print_msg "设备ID基于以下硬件特征生成："
+    print_msg "  - CPU序列号"
+    print_msg "  - 磁盘序列号"
+    print_msg "  - 主板序列号"
+    print_msg "  - MAC地址"
+    echo ""
+    print_msg "同一台设备重新生成的ID是相同的"
+    print_msg "不同设备（即使系统克隆）生成的ID是不同的"
+    echo ""
     
     if [ -f /etc/printer-device-id ]; then
         OLD_ID=$(cat /etc/printer-device-id)
         print_msg "当前设备ID: $OLD_ID"
         echo ""
-        read -p "确定要重新生成设备ID吗? 这将导致需要重新绑定设备 [y/N]: " CONFIRM
+        read -p "确定要重新生成设备ID吗? [y/N]: " CONFIRM
         if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
             print_msg "取消操作"
             return
@@ -623,10 +649,10 @@ regenerate_device_id() {
         rm -f /etc/printer-device-id
     fi
     
-    # 生成新ID
+    # 生成新ID（基于硬件特征，同一设备会生成相同ID）
     NEW_ID=$(get_device_id)
-    print_msg "新设备ID: $NEW_ID"
-    print_msg "设备ID已保存到 /etc/printer-device-id"
+    print_msg "设备ID: $NEW_ID"
+    print_msg "已保存到 /etc/printer-device-id"
     
     # 重启服务
     if systemctl is-active --quiet $SERVICE_NAME; then
@@ -634,12 +660,9 @@ regenerate_device_id() {
         systemctl restart $SERVICE_NAME
     fi
     
+    # 生成二维码
     echo ""
-    print_warn "请在小程序中重新扫码绑定此设备"
-    
-    # 生成新二维码
-    echo ""
-    read -p "是否生成新的设备二维码? [Y/n]: " GEN_QR
+    read -p "是否生成设备二维码? [Y/n]: " GEN_QR
     if [ "$GEN_QR" != "n" ] && [ "$GEN_QR" != "N" ]; then
         generate_qrcode
     fi
@@ -787,4 +810,3 @@ main() {
     esac
 }
 
-main "$@"
