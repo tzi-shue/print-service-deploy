@@ -27,23 +27,20 @@ function getDeviceId(): string
         }
     }
 
-    // 2. 仅使用CPU序列号作为设备ID
-    $deviceId = '';
+    // 2. 仅使用CPU序列号作为设备ID（严格模式，无CPU序列号则报错）
     $cpuInfo = @file_get_contents('/proc/cpuinfo');
-    if ($cpuInfo && preg_match('/Serial\s*:\s*([0-9a-fA-F]+)/i', $cpuInfo, $m)) {
-        $cpuSerial = trim($m[1]);
-        if (!empty($cpuSerial) && $cpuSerial !== '0000000000000000') {
-            $deviceId = md5('cpu:' . strtolower($cpuSerial));
-        }
+    if (!$cpuInfo || !preg_match('/Serial\s*:\s*([0-9a-fA-F]+)/i', $cpuInfo, $m)) {
+        die("错误：无法获取CPU序列号，无法生成设备ID\n");
     }
 
-    // 3. 如果无法获取CPU序列号，使用随机ID
-    if (empty($deviceId)) {
-        $random = bin2hex(random_bytes(16));
-        $deviceId = md5('rand:' . $random . ':' . microtime(true));
+    $cpuSerial = trim($m[1]);
+    if (empty($cpuSerial) || $cpuSerial === '0000000000000000') {
+        die("错误：CPU序列号无效，无法生成设备ID\n");
     }
 
-    // 4. 保存设备ID到文件，后续只会读取这个文件，不再重新生成
+    $deviceId = md5('cpu:' . strtolower($cpuSerial));
+
+    // 3. 保存设备ID到文件，后续只会读取这个文件，不再重新生成
     @file_put_contents($idFile, $deviceId);
     @chmod($idFile, 0644);
 
