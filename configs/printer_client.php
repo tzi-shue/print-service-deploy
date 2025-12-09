@@ -2,19 +2,7 @@
 <?php
 /**
  * 打印机端 WebSocket 客户端
- * 
- * 功能：
- * 1. 连接到服务器 WebSocket
- * 2. 注册设备，上报打印机列表
- * 3. 接收并执行命令（检测USB、添加打印机、打印）
- * 4. 心跳保活，断线重连
- * 
- * 使用方法：
- * php printer_client.php
- * 
- * 建议使用 systemd 或 supervisor 管理进程
  */
-
 // ============ 配置 ============
 // TODO: 修改为你的服务器地址
 $WS_SERVER = 'ws://xinprint.zyshare.top:8089';  // WebSocket 服务器地址
@@ -43,13 +31,55 @@ function getSystemInfo(): array
         'php_version' => PHP_VERSION,
     ];
     
-    // 获取IP地址
-    $ip = shell_exec("hostname -I 2>/dev/null | awk '{print \$1}'");
+    // 获取内网IP地址（多种方式尝试）
+    $ip = getLocalIp();
     if ($ip) {
-        $info['ip'] = trim($ip);
+        $info['ip'] = $ip;
     }
     
     return $info;
+}
+
+// ============ 获取内网IP地址 ============
+function getLocalIp(): string
+{
+    // 方法1: hostname -I (Linux)
+    $ip = @shell_exec("hostname -I 2>/dev/null | awk '{print \$1}'");
+    if ($ip && filter_var(trim($ip), FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+        $ip = trim($ip);
+        // 排除回环地址
+        if ($ip !== '127.0.0.1') {
+            return $ip;
+        }
+    }
+    
+    // 方法2: ip route (Linux)
+    $ip = @shell_exec("ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \\K[0-9.]+'");
+    if ($ip && filter_var(trim($ip), FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+        return trim($ip);
+    }
+    
+    // 方法3: ifconfig (Linux/Mac)
+    $output = @shell_exec("ifconfig 2>/dev/null | grep -Eo 'inet (addr:)?([0-9]*\\.){3}[0-9]*' | grep -v '127.0.0.1' | head -1");
+    if ($output) {
+        preg_match('/([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)/', $output, $matches);
+        if (!empty($matches[1])) {
+            return $matches[1];
+        }
+    }
+    
+    // 方法4: 通过socket获取
+    $sock = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
+    if ($sock) {
+        @socket_connect($sock, "8.8.8.8", 53);
+        @socket_getsockname($sock, $ip);
+        @socket_close($sock);
+        if ($ip && $ip !== '0.0.0.0' && $ip !== '127.0.0.1') {
+            return $ip;
+        }
+    }
+    
+    return '';
 }
 
 // ============ 获取CUPS打印机列表 ============
@@ -348,6 +378,168 @@ function removePrinter(string $name): array
     }
 }
 
+// ============ 更换打印机驱动 ============
+function changeDriver(string $printerName, string $newDriver): array
+{
+    echo "[changeDriver] 打印机: $printerName, 新驱动: $newDriver\n";
+    
+    // 先获取打印机的URI
+    $uriOutput = [];
+    exec('LANG=C lpstat -v ' . escapeshellarg($printerName) . ' 2>&1', $uriOutput);
+    $uri = '';
+    
+    foreach ($uriOutput as $line) {
+        if (preg_match('/device for \S+:\s*(.+)/i', $line, $m)) {
+            $uri = trim($m[1]);
+            break;
+        }
+    }
+    
+    if (empty($uri)) {
+        return ['success' => false, 'message' => '无法获取打印机URI'];
+    }
+    
+    echo "[changeDriver] 获取到URI: $uri\n";
+    
+    // 使用 lpadmin 修改驱动（-m 参数）
+    $cmd = sprintf(
+        'lpadmin -p %s -m %s 2>&1',
+        escapeshellarg($printerName),
+        escapeshellarg($newDriver)
+    );
+    
+    echo "[changeDriver] 执行命令: $cmd\n";
+    exec($cmd, $output, $returnCode);
+    echo "[changeDriver] 返回码: $returnCode, 输出: " . implode(' ', $output) . "\n";
+    
+    if ($returnCode === 0) {
+        // 确保打印机仍然启用
+        exec("cupsenable " . escapeshellarg($printerName) . " 2>&1");
+        exec("cupsaccept " . escapeshellarg($printerName) . " 2>&1");
+        return ['success' => true, 'message' => "驱动已更换为 $newDriver"];
+    } else {
+        return ['success' => false, 'message' => '更换失败: ' . implode("\n", $output)];
+    }
+}
+
+// ============ 升级客户端 ============
+function upgradeClient(string $downloadUrl): array
+{
+    echo "[upgradeClient] 开始升级，下载地址: $downloadUrl\n";
+    
+    // 获取当前脚本路径
+    $currentScript = realpath(__FILE__);
+    $backupScript = $currentScript . '.backup.' . date('YmdHis');
+    $tempScript = '/tmp/printer_client_new.php';
+    
+    // 下载新版本
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $downloadUrl,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 60,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_SSL_VERIFYPEER => false
+    ]);
+    
+    $newContent = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    if ($httpCode !== 200 || empty($newContent)) {
+        return ['success' => false, 'message' => '下载新版本失败，HTTP状态码: ' . $httpCode];
+    }
+    
+    // 验证下载的内容是有效的PHP文件
+    if (strpos($newContent, '<?php') === false) {
+        return ['success' => false, 'message' => '下载的文件不是有效的PHP文件'];
+    }
+    
+    // 保存到临时文件
+    if (file_put_contents($tempScript, $newContent) === false) {
+        return ['success' => false, 'message' => '保存临时文件失败'];
+    }
+    
+    // 验证PHP语法
+    exec('php -l ' . escapeshellarg($tempScript) . ' 2>&1', $syntaxOutput, $syntaxCode);
+    if ($syntaxCode !== 0) {
+        @unlink($tempScript);
+        return ['success' => false, 'message' => 'PHP语法错误: ' . implode("\n", $syntaxOutput)];
+    }
+    
+    // 备份当前文件
+    if (!copy($currentScript, $backupScript)) {
+        @unlink($tempScript);
+        return ['success' => false, 'message' => '备份当前文件失败'];
+    }
+    
+    // 替换当前文件
+    if (!rename($tempScript, $currentScript)) {
+        // 恢复备份
+        copy($backupScript, $currentScript);
+        @unlink($tempScript);
+        return ['success' => false, 'message' => '替换文件失败'];
+    }
+    
+    echo "[upgradeClient] 升级成功，准备重启服务...\n";
+    
+    // 检查新文件版本
+    $newVersion = '';
+    if (preg_match("/'version'\s*=>\s*'([^']+)'/", file_get_contents($currentScript), $m)) {
+        $newVersion = $m[1];
+    }
+    echo "[upgradeClient] 新版本: {$newVersion}\n";
+    
+    // 尝试多种方式重启服务
+    // 延迟1秒后重启，确保响应能发送出去
+    $restartScript = <<<'BASH'
+sleep 1
+
+# 方法1: 尝试常见的 systemd 服务名
+for svc in printer-client websocket-printer printer_client; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        systemctl restart "$svc"
+        exit 0
+    fi
+done
+
+# 方法2: 杀掉当前进程，让 systemd 自动重启（如果配置了 Restart=always）
+pkill -f "printer_client.php"
+
+# 方法3: 如果没有 systemd，直接后台启动新进程
+sleep 1
+if ! pgrep -f "printer_client.php" > /dev/null; then
+    nohup php SCRIPT_PATH > /dev/null 2>&1 &
+fi
+BASH;
+    
+    // 替换脚本路径
+    $restartScript = str_replace('SCRIPT_PATH', escapeshellarg($currentScript), $restartScript);
+    
+    // 写入临时脚本并执行
+    $tmpScript = '/tmp/restart_printer_client.sh';
+    file_put_contents($tmpScript, $restartScript);
+    chmod($tmpScript, 0755);
+    exec("bash {$tmpScript} > /dev/null 2>&1 &");
+    
+    return ['success' => true, 'message' => "升级成功，新版本: {$newVersion}，服务正在重启"];
+}
+
+// ============ 获取客户端版本信息 ============
+function getClientVersion(): array
+{
+    $scriptPath = realpath(__FILE__);
+    $modTime = filemtime($scriptPath);
+    $hash = md5_file($scriptPath);
+    
+    return [
+        'version' => '1.0.2',
+        'file_hash' => $hash,
+        'modified_time' => date('Y-m-d H:i:s', $modTime),
+        'script_path' => $scriptPath
+    ];
+}
+
 // ============ 测试打印 ============
 function testPrint(string $printerName): array
 {
@@ -567,8 +759,9 @@ class PrinterClient
             'device_id' => $this->deviceId,
             'openid' => $openid,  // 首次为空，等待用户扫码绑定
             'name' => $systemInfo['hostname'] ?? '',
-            'version' => '1.0.0',
-            'os_info' => $systemInfo['os'] ?? ''
+            'version' => '1.0.2',
+            'os_info' => $systemInfo['os'] ?? '',
+            'ip_address' => $systemInfo['ip'] ?? ''  // 上报内网IP
         ]);
         
         // 上报打印机列表 - 使用 printers_update
@@ -853,6 +1046,27 @@ class PrinterClient
                 ]);
                 break;
                 
+            case 'change_driver':
+                // 更换打印机驱动
+                $printerName = $data['printer_name'] ?? '';
+                $newDriver = $data['driver'] ?? 'everywhere';
+                echo "[change_driver] 打印机: $printerName, 新驱动: $newDriver\n";
+                
+                $result = changeDriver($printerName, $newDriver);
+                $this->send([
+                    'action' => 'change_driver_result',
+                    'request_id' => $data['request_id'] ?? '',
+                    'success' => $result['success'],
+                    'message' => $result['message']
+                ]);
+                // 更新打印机列表
+                sleep(1);
+                $this->send([
+                    'action' => 'printer_list',
+                    'printers' => getPrinterList()
+                ]);
+                break;
+                
             case 'print':
                 // 执行打印
                 $printer = $data['printer'] ?? $data['printer_name'] ?? '';
@@ -925,6 +1139,41 @@ class PrinterClient
                 
             case 'error':
                 echo "服务器错误: " . ($data['message'] ?? '') . "\n";
+                break;
+                
+            case 'upgrade':
+                // 升级客户端
+                $downloadUrl = $data['download_url'] ?? '';
+                $requestId = $data['request_id'] ?? '';
+                echo "[upgrade] 收到升级命令，下载地址: $downloadUrl\n";
+                
+                if (empty($downloadUrl)) {
+                    $this->send([
+                        'action' => 'upgrade_result',
+                        'request_id' => $requestId,
+                        'success' => false,
+                        'message' => '下载地址为空'
+                    ]);
+                } else {
+                    $result = upgradeClient($downloadUrl);
+                    $this->send([
+                        'action' => 'upgrade_result',
+                        'request_id' => $requestId,
+                        'success' => $result['success'],
+                        'message' => $result['message']
+                    ]);
+                }
+                break;
+                
+            case 'get_version':
+                // 获取客户端版本信息
+                $requestId = $data['request_id'] ?? '';
+                $versionInfo = getClientVersion();
+                $this->send([
+                    'action' => 'version_info',
+                    'request_id' => $requestId,
+                    'data' => $versionInfo
+                ]);
                 break;
         }
     }
