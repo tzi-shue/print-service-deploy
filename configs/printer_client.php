@@ -18,21 +18,18 @@ $HEARTBEAT_INTERVAL = $_CFG['h'] ?? 30;
 
 function getDeviceId(): string
 {
-    // 优先使用已保存的设备ID（确保重启后ID不变）
     $idFile = '/etc/printer-device-id';
+
+    // 1. 如果文件中已经有设备ID，直接使用（保证重启/重装后不变）
     if (file_exists($idFile)) {
-        $id = trim(file_get_contents($idFile));
+        $id = trim(@file_get_contents($idFile) ?: '');
         if (!empty($id) && strlen($id) === 32) {
             return $id;
         }
     }
-    
-    // 基于硬件特征生成唯一设备ID（格式化重装后也不变）
-    // 只使用 CPU序列号 或 主板序列号，不使用MAC地址
-    
+
+    // 2. 尝试使用 CPU 序列号（适用于绝大多数 ARM 设备）
     $deviceId = '';
-    
-    // 1. CPU序列号（树莓派等ARM设备有唯一序列号）
     $cpuInfo = @file_get_contents('/proc/cpuinfo');
     if ($cpuInfo && preg_match('/Serial\s*:\s*([0-9a-fA-F]+)/i', $cpuInfo, $m)) {
         $cpuSerial = trim($m[1]);
@@ -40,29 +37,28 @@ function getDeviceId(): string
             $deviceId = md5('cpu:' . $cpuSerial);
         }
     }
-    
-    // 2. 如果没有CPU序列号，使用主板序列号（x86设备）
+
+    // 3. 如果没有 CPU 序列号，再尝试主板/产品序列号
     if (empty($deviceId)) {
         $boardSerial = trim(@file_get_contents('/sys/class/dmi/id/board_serial') ?: '');
-        if (empty($boardSerial) || $boardSerial === 'None' || $boardSerial === 'Default string') {
+        if ($boardSerial === '' || $boardSerial === 'None' || $boardSerial === 'Default string') {
             $boardSerial = trim(@file_get_contents('/sys/class/dmi/id/product_serial') ?: '');
         }
-        if (!empty($boardSerial) && $boardSerial !== 'None' && $boardSerial !== 'Default string' && $boardSerial !== 'To Be Filled By O.E.M.') {
+        if (!empty($boardSerial) && !in_array($boardSerial, ['None', 'Default string', 'To Be Filled By O.E.M.'], true)) {
             $deviceId = md5('board:' . $boardSerial);
         }
     }
-    
-    // 必须有CPU序列号或主板序列号
+
+    // 4. 如果以上硬件特征都获取不到，生成一个随机ID并写入文件
     if (empty($deviceId)) {
-        throw new Exception('无法获取硬件特征（需要CPU序列号或主板序列号）');
+        $random = bin2hex(random_bytes(16));
+        $deviceId = md5('rand:' . $random . ':' . microtime(true));
     }
-    
-    // 保存设备ID到文件
-    $saved = @file_put_contents($idFile, $deviceId);
-    if ($saved !== false) {
-        @chmod($idFile, 0644);
-    }
-    
+
+    // 5. 保存设备ID到文件，后续只会读取这个文件，不再重新生成
+    @file_put_contents($idFile, $deviceId);
+    @chmod($idFile, 0644);
+
     return $deviceId;
 }
 
