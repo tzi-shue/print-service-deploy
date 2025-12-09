@@ -18,12 +18,60 @@ $HEARTBEAT_INTERVAL = $_CFG['h'] ?? 30;
 
 function getDeviceId(): string
 {
-    $machineId = @file_get_contents('/etc/machine-id');
-    if ($machineId) {
-        return md5(trim($machineId));
+    // 优先使用已保存的设备ID（确保重启后ID不变）
+    $idFile = '/etc/printer-device-id';
+    if (file_exists($idFile)) {
+        $id = trim(file_get_contents($idFile));
+        if (!empty($id)) {
+            return $id;
+        }
     }
     
-    throw new Exception('未找到 /etc/machine-id');
+    // 基于硬件特征生成唯一且固定的设备ID
+    $cpuSerial = '';
+    $diskSerial = '';
+    $boardSerial = '';
+    $macAddr = '';
+    
+    // 1. CPU序列号（树莓派等ARM设备有唯一序列号）
+    $cpuInfo = @file_get_contents('/proc/cpuinfo');
+    if ($cpuInfo && preg_match('/Serial\s*:\s*(\S+)/i', $cpuInfo, $m)) {
+        $cpuSerial = trim($m[1]);
+    }
+    
+    // 2. 磁盘序列号
+    $diskSerial = trim(@shell_exec("lsblk -o SERIAL -n 2>/dev/null | grep -v '^$' | head -1") ?: '');
+    if (empty($diskSerial)) {
+        // 尝试从 /dev/disk/by-id 获取
+        $diskId = trim(@shell_exec("ls -la /dev/disk/by-id/ 2>/dev/null | grep -v 'part\\|wwn' | head -2 | tail -1 | awk '{print \$NF}' | xargs basename 2>/dev/null") ?: '');
+        if (!empty($diskId)) {
+            $diskSerial = $diskId;
+        }
+    }
+    
+    // 3. 主板序列号
+    $boardSerial = trim(@file_get_contents('/sys/class/dmi/id/board_serial') ?: '');
+    if (empty($boardSerial)) {
+        $boardSerial = trim(@file_get_contents('/sys/class/dmi/id/product_serial') ?: '');
+    }
+    
+    // 4. MAC地址
+    $macAddr = trim(@shell_exec("ip link show | grep -m1 'link/ether' | awk '{print \$2}'") ?: '');
+    
+    // 组合所有硬件特征
+    $combined = $cpuSerial . $diskSerial . $boardSerial . $macAddr;
+    
+    if (empty($combined)) {
+        throw new Exception('无法获取硬件特征');
+    }
+    
+    $deviceId = md5($combined);
+    
+    // 保存设备ID到文件
+    @file_put_contents($idFile, $deviceId);
+    @chmod($idFile, 0644);
+    
+    return $deviceId;
 }
 
 function getSystemInfo(): array
@@ -352,20 +400,24 @@ function changeDriver(string $printerName, string $newDriver): array
     $uri = '';
     
     foreach ($uriOutput as $line) {
+        // 匹配: "device for PrinterName: usb://..."
         if (preg_match('/device for [^:]+:\s*(.+)/i', $line, $m)) {
             $uri = trim($m[1]);
             break;
         }
+        // 匹配: "PrinterName 的设备：usb://..."
         if (preg_match('/的设备[：:]\s*(.+)/', $line, $m)) {
             $uri = trim($m[1]);
             break;
         }
+        // 直接匹配URI格式
         if (preg_match('/(usb:\/\/\S+|ipp:\/\/\S+|socket:\/\/\S+|lpd:\/\/\S+)/', $line, $m)) {
             $uri = trim($m[1]);
             break;
         }
     }
     
+    // 更换驱动不需要URI，直接用lpadmin -p -m即可
     $cmd = sprintf(
         'lpadmin -p %s -m %s 2>&1',
         escapeshellarg($printerName),
