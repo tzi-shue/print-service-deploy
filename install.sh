@@ -308,7 +308,7 @@ configure_server() {
     print_msg "服务器配置已内置，无需手动配置"
 }
 
-# 获取设备ID（唯一且固定不变）
+# 获取设备ID（唯一且固定不变，与 printer_client.php 保持一致）
 get_device_id() {
     # 优先使用已保存的设备ID
     if [ -f /etc/printer-device-id ]; then
@@ -316,46 +316,51 @@ get_device_id() {
         return
     fi
     
-    # 基于硬件特征生成唯一且固定的设备ID
-    # 组合多个硬件因素，确保：
-    # 1. 同一设备永远生成相同ID
-    # 2. 不同设备生成不同ID（即使是克隆的系统）
+    # 使用PHP生成设备ID，确保与 printer_client.php 完全一致
+    local device_id=$(php -r '
+        $cpuSerial = "";
+        $diskSerial = "";
+        $boardSerial = "";
+        $macAddr = "";
+        
+        // 1. CPU序列号
+        $cpuInfo = @file_get_contents("/proc/cpuinfo");
+        if ($cpuInfo && preg_match("/Serial\s*:\s*(\S+)/i", $cpuInfo, $m)) {
+            $cpuSerial = trim($m[1]);
+        }
+        
+        // 2. 磁盘序列号
+        $diskSerial = trim(@shell_exec("lsblk -o SERIAL -n 2>/dev/null | grep -v \"^$\" | head -1") ?: "");
+        if (empty($diskSerial)) {
+            $diskId = trim(@shell_exec("ls -la /dev/disk/by-id/ 2>/dev/null | grep -v \"part\|wwn\" | head -2 | tail -1 | awk \"{print \\\$NF}\" | xargs basename 2>/dev/null") ?: "");
+            if (!empty($diskId)) {
+                $diskSerial = $diskId;
+            }
+        }
+        
+        // 3. 主板序列号
+        $boardSerial = trim(@file_get_contents("/sys/class/dmi/id/board_serial") ?: "");
+        if (empty($boardSerial)) {
+            $boardSerial = trim(@file_get_contents("/sys/class/dmi/id/product_serial") ?: "");
+        }
+        
+        // 4. MAC地址
+        $macAddr = trim(@shell_exec("ip link show | grep -m1 \"link/ether\" | awk \"{print \\\$2}\"") ?: "");
+        
+        $combined = $cpuSerial . $diskSerial . $boardSerial . $macAddr;
+        
+        if (empty($combined)) {
+            echo "error";
+            exit(1);
+        }
+        
+        echo md5($combined);
+    ')
     
-    local cpu_serial=""
-    local disk_serial=""
-    local mac_addr=""
-    local board_serial=""
-    
-    # 1. CPU序列号（树莓派等ARM设备有唯一序列号）
-    cpu_serial=$(cat /proc/cpuinfo | grep -i 'Serial' | awk -F: '{print $2}' | tr -d ' ' 2>/dev/null || echo "")
-    
-    # 2. 磁盘/存储设备序列号（每个硬盘/SD卡唯一）
-    disk_serial=$(lsblk -o SERIAL -n 2>/dev/null | grep -v '^$' | head -1 || echo "")
-    if [ -z "$disk_serial" ]; then
-        # 尝试从 /dev/disk/by-id 获取
-        disk_serial=$(ls -la /dev/disk/by-id/ 2>/dev/null | grep -v 'part\|wwn' | head -2 | tail -1 | awk '{print $NF}' | xargs basename 2>/dev/null || echo "")
-    fi
-    
-    # 3. 主板序列号
-    board_serial=$(cat /sys/class/dmi/id/board_serial 2>/dev/null || echo "")
-    if [ -z "$board_serial" ]; then
-        board_serial=$(cat /sys/class/dmi/id/product_serial 2>/dev/null || echo "")
-    fi
-    
-    # 4. MAC地址（作为备选，但可能被克隆）
-    mac_addr=$(ip link show | grep -m1 'link/ether' | awk '{print $2}' 2>/dev/null || echo "")
-    
-    # 组合所有硬件特征
-    local combined="${cpu_serial}${disk_serial}${board_serial}${mac_addr}"
-    
-    # 如果所有硬件特征都为空，报错
-    if [ -z "$combined" ]; then
+    if [ "$device_id" = "error" ] || [ -z "$device_id" ]; then
         print_error "无法获取硬件特征，请手动创建 /etc/printer-device-id"
         exit 1
     fi
-    
-    # 生成设备ID
-    local device_id=$(echo -n "$combined" | md5sum | cut -d' ' -f1)
     
     # 保存设备ID到文件
     echo "$device_id" > /etc/printer-device-id
