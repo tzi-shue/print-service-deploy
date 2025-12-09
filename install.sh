@@ -623,51 +623,6 @@ uninstall() {
     print_msg "卸载完成"
 }
 
-# 重新生成设备ID（基于硬件特征重新计算）
-regenerate_device_id() {
-    print_step "重新生成设备ID"
-    
-    print_msg "设备ID基于以下硬件特征生成："
-    print_msg "  - CPU序列号"
-    print_msg "  - 磁盘序列号"
-    print_msg "  - 主板序列号"
-    print_msg "  - MAC地址"
-    echo ""
-    print_msg "同一台设备重新生成的ID是相同的"
-    print_msg "不同设备（即使系统克隆）生成的ID是不同的"
-    echo ""
-    
-    if [ -f /etc/printer-device-id ]; then
-        OLD_ID=$(cat /etc/printer-device-id)
-        print_msg "当前设备ID: $OLD_ID"
-        echo ""
-        read -p "确定要重新生成设备ID吗? [y/N]: " CONFIRM
-        if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
-            print_msg "取消操作"
-            return
-        fi
-        rm -f /etc/printer-device-id
-    fi
-    
-    # 生成新ID（基于硬件特征，同一设备会生成相同ID）
-    NEW_ID=$(get_device_id)
-    print_msg "设备ID: $NEW_ID"
-    print_msg "已保存到 /etc/printer-device-id"
-    
-    # 重启服务
-    if systemctl is-active --quiet $SERVICE_NAME; then
-        print_msg "重启服务..."
-        systemctl restart $SERVICE_NAME
-    fi
-    
-    # 生成二维码
-    echo ""
-    read -p "是否生成设备二维码? [Y/n]: " GEN_QR
-    if [ "$GEN_QR" != "n" ] && [ "$GEN_QR" != "N" ]; then
-        generate_qrcode
-    fi
-}
-
 # 主菜单
 show_menu() {
     echo ""
@@ -682,11 +637,10 @@ show_menu() {
     echo "  5. 添加打印机"
     echo "  6. 生成设备二维码"
     echo "  7. 查看服务状态"
-    echo "  8. 重新生成设备ID (解决ID冲突)"
-    echo "  9. 卸载"
+    echo "  8. 卸载"
     echo "  0. 退出"
     echo ""
-    read -p "请选择 [0-9]: " MENU_CHOICE
+    read -p "请选择 [0-8]: " MENU_CHOICE
     
     case $MENU_CHOICE in
         1)
@@ -729,10 +683,6 @@ show_menu() {
             tail -20 $LOG_FILE 2>/dev/null || echo "(无日志)"
             ;;
         8)
-            check_root
-            regenerate_device_id
-            ;;
-        9)
             check_root
             uninstall
             ;;
@@ -810,3 +760,4 @@ main() {
     esac
 }
 
+main "$@"
