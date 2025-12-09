@@ -434,85 +434,106 @@ start_service() {
 detect_printers() {
     print_step "检测打印机"
     
-    print_msg "已配置的打印机:"
+    # 显示菜单选项
     echo ""
-    lpstat -a 2>/dev/null || echo "  (无)"
+    echo "请选择操作:"
+    echo "  1. 检测打印机"
+    echo "  2. 添加打印机"
+    echo "  0. 跳过打印机设置"
     echo ""
-    
-    print_msg "默认打印机:"
-    lpstat -d 2>/dev/null || echo "  (未设置)"
-    echo ""
-    
-    # 检测USB打印机
-    print_msg "USB 设备:"
-    lsusb 2>/dev/null | grep -i "print\|samsung\|hp\|canon\|epson\|brother" || echo "  (未检测到打印机USB设备)"
-    echo ""
-}
-
-# 添加打印机向导
-add_printer_wizard() {
-    print_step "添加打印机"
-    
-    echo ""
-    echo "添加打印机方式:"
-    echo "  1. 通过 CUPS Web 界面 (推荐)"
-    echo "  2. 命令行添加 USB 打印机"
-    echo "  3. 命令行添加网络打印机"
-    echo "  4. 跳过"
-    echo ""
-    read -p "请选择 [1-4]: " CHOICE
+    read -p "请选择 [0-2]: " CHOICE
     
     case $CHOICE in
         1)
-            print_msg "请在浏览器中访问: http://$(hostname -I | awk '{print $1}'):631"
-            print_msg "用户名: root, 密码: 系统root密码"
+            print_msg "已配置的打印机:"
+            echo ""
+            lpstat -a 2>/dev/null || echo "  (无)"
+            echo ""
+            
+            print_msg "默认打印机:"
+            lpstat -d 2>/dev/null || echo "  (未设置)"
+            echo ""
+            
+            # 检测USB打印机
+            print_msg "USB 设备:"
+            lsusb 2>/dev/null | grep -i "print\|samsung\|hp\|canon\|epson\|brother" || echo "  (未检测到打印机USB设备)"
+            echo ""
             ;;
         2)
-            # USB打印机
-            print_msg "检测 USB 打印机..."
-            lpinfo -v 2>/dev/null | grep usb || echo "未检测到USB打印机"
+            # 添加打印机向导
+            print_step "添加打印机"
+            
             echo ""
-            read -p "请输入打印机URI (如 usb://...): " PRINTER_URI
-            read -p "请输入打印机名称: " PRINTER_NAME
+            echo "添加打印机方式:"
+            echo "  1. 通过 CUPS Web 界面 (推荐)"
+            echo "  2. 命令行添加 USB 打印机"
+            echo "  3. 命令行添加网络打印机"
+            echo "  0. 返回上一级"
+            echo ""
+            read -p "请选择 [0-3]: " SUB_CHOICE
             
-            if [ -n "$PRINTER_URI" ] && [ -n "$PRINTER_NAME" ]; then
-                # 查找驱动
-                print_msg "查找驱动..."
-                lpinfo -m | head -20
-                echo ""
-                read -p "请输入驱动名称 (如 drv:///...): " DRIVER
-                
-                lpadmin -p "$PRINTER_NAME" -v "$PRINTER_URI" -m "$DRIVER" -E
-                print_msg "打印机 $PRINTER_NAME 已添加"
-            fi
-            ;;
-        3)
-            # 网络打印机
-            read -p "请输入打印机IP地址: " PRINTER_IP
-            read -p "请输入打印机名称: " PRINTER_NAME
-            read -p "协议 [ipp/lpd/socket] (默认ipp): " PROTOCOL
-            PROTOCOL=${PROTOCOL:-ipp}
-            
-            case $PROTOCOL in
-                ipp)
-                    PRINTER_URI="ipp://$PRINTER_IP/ipp/print"
+            case $SUB_CHOICE in
+                1)
+                    print_msg "请在浏览器中访问: http://$(hostname -I | awk '{print $1}'):631"
+                    print_msg "用户名: root, 密码: 系统root密码"
                     ;;
-                lpd)
-                    PRINTER_URI="lpd://$PRINTER_IP/queue"
+                2)
+                    # USB打印机
+                    print_msg "检测 USB 打印机..."
+                    lpinfo -v 2>/dev/null | grep usb || echo "未检测到USB打印机"
+                    echo ""
+                    read -p "请输入打印机URI (如 usb://...): " PRINTER_URI
+                    read -p "请输入打印机名称: " PRINTER_NAME
+                    
+                    if [ -n "$PRINTER_URI" ] && [ -n "$PRINTER_NAME" ]; then
+                        # 查找驱动
+                        print_msg "查找驱动..."
+                        lpinfo -m | head -20
+                        echo ""
+                        read -p "请输入驱动名称 (如 drv:///...): " DRIVER
+                        
+                        lpadmin -p "$PRINTER_NAME" -v "$PRINTER_URI" -m "$DRIVER" -E
+                        print_msg "打印机 $PRINTER_NAME 已添加"
+                    fi
                     ;;
-                socket)
-                    PRINTER_URI="socket://$PRINTER_IP:9100"
+                3)
+                    # 网络打印机
+                    read -p "请输入打印机IP地址: " PRINTER_IP
+                    read -p "请输入打印机名称: " PRINTER_NAME
+                    read -p "协议 [ipp/lpd/socket] (默认ipp): " PROTOCOL
+                    PROTOCOL=${PROTOCOL:-ipp}
+                    
+                    case $PROTOCOL in
+                        ipp)
+                            PRINTER_URI="ipp://$PRINTER_IP/ipp/print"
+                            ;;
+                        lpd)
+                            PRINTER_URI="lpd://$PRINTER_IP/queue"
+                            ;;
+                        socket)
+                            PRINTER_URI="socket://$PRINTER_IP:9100"
+                            ;;
+                    esac
+                    
+                    if [ -n "$PRINTER_NAME" ]; then
+                        lpadmin -p "$PRINTER_NAME" -v "$PRINTER_URI" -m everywhere -E 2>/dev/null || \
+                        lpadmin -p "$PRINTER_NAME" -v "$PRINTER_URI" -m raw -E
+                        print_msg "打印机 $PRINTER_NAME 已添加"
+                    fi
+                    ;;
+                0)
+                    print_msg "返回上一级"
+                    ;;
+                *)
+                    print_error "无效的选择"
                     ;;
             esac
-            
-            if [ -n "$PRINTER_NAME" ]; then
-                lpadmin -p "$PRINTER_NAME" -v "$PRINTER_URI" -m everywhere -E 2>/dev/null || \
-                lpadmin -p "$PRINTER_NAME" -v "$PRINTER_URI" -m raw -E
-                print_msg "打印机 $PRINTER_NAME 已添加"
-            fi
             ;;
-        4)
-            print_msg "跳过添加打印机"
+        0)
+            print_msg "跳过打印机设置"
+            ;;
+        *)
+            print_error "无效的选择"
             ;;
     esac
 }
