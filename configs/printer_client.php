@@ -22,54 +22,46 @@ function getDeviceId(): string
     $idFile = '/etc/printer-device-id';
     if (file_exists($idFile)) {
         $id = trim(file_get_contents($idFile));
-        if (!empty($id)) {
+        if (!empty($id) && strlen($id) === 32) {
             return $id;
         }
     }
     
-    // 基于硬件特征生成唯一且固定的设备ID
-    $cpuSerial = '';
-    $diskSerial = '';
-    $boardSerial = '';
-    $macAddr = '';
+    // 基于硬件特征生成唯一设备ID（格式化重装后也不变）
+    // 只使用 CPU序列号 或 主板序列号，不使用MAC地址
+    
+    $deviceId = '';
     
     // 1. CPU序列号（树莓派等ARM设备有唯一序列号）
     $cpuInfo = @file_get_contents('/proc/cpuinfo');
-    if ($cpuInfo && preg_match('/Serial\s*:\s*(\S+)/i', $cpuInfo, $m)) {
+    if ($cpuInfo && preg_match('/Serial\s*:\s*([0-9a-fA-F]+)/i', $cpuInfo, $m)) {
         $cpuSerial = trim($m[1]);
-    }
-    
-    // 2. 磁盘序列号
-    $diskSerial = trim(@shell_exec("lsblk -o SERIAL -n 2>/dev/null | grep -v '^$' | head -1") ?: '');
-    if (empty($diskSerial)) {
-        // 尝试从 /dev/disk/by-id 获取
-        $diskId = trim(@shell_exec("ls -la /dev/disk/by-id/ 2>/dev/null | grep -v 'part\\|wwn' | head -2 | tail -1 | awk '{print \$NF}' | xargs basename 2>/dev/null") ?: '');
-        if (!empty($diskId)) {
-            $diskSerial = $diskId;
+        if (!empty($cpuSerial) && $cpuSerial !== '0000000000000000') {
+            $deviceId = md5('cpu:' . $cpuSerial);
         }
     }
     
-    // 3. 主板序列号
-    $boardSerial = trim(@file_get_contents('/sys/class/dmi/id/board_serial') ?: '');
-    if (empty($boardSerial)) {
-        $boardSerial = trim(@file_get_contents('/sys/class/dmi/id/product_serial') ?: '');
+    // 2. 如果没有CPU序列号，使用主板序列号（x86设备）
+    if (empty($deviceId)) {
+        $boardSerial = trim(@file_get_contents('/sys/class/dmi/id/board_serial') ?: '');
+        if (empty($boardSerial) || $boardSerial === 'None' || $boardSerial === 'Default string') {
+            $boardSerial = trim(@file_get_contents('/sys/class/dmi/id/product_serial') ?: '');
+        }
+        if (!empty($boardSerial) && $boardSerial !== 'None' && $boardSerial !== 'Default string' && $boardSerial !== 'To Be Filled By O.E.M.') {
+            $deviceId = md5('board:' . $boardSerial);
+        }
     }
     
-    // 4. MAC地址
-    $macAddr = trim(@shell_exec("ip link show | grep -m1 'link/ether' | awk '{print \$2}'") ?: '');
-    
-    // 组合所有硬件特征
-    $combined = $cpuSerial . $diskSerial . $boardSerial . $macAddr;
-    
-    if (empty($combined)) {
-        throw new Exception('无法获取硬件特征');
+    // 必须有CPU序列号或主板序列号
+    if (empty($deviceId)) {
+        throw new Exception('无法获取硬件特征（需要CPU序列号或主板序列号）');
     }
-    
-    $deviceId = md5($combined);
     
     // 保存设备ID到文件
-    @file_put_contents($idFile, $deviceId);
-    @chmod($idFile, 0644);
+    $saved = @file_put_contents($idFile, $deviceId);
+    if ($saved !== false) {
+        @chmod($idFile, 0644);
+    }
     
     return $deviceId;
 }
