@@ -227,9 +227,6 @@ install_printer_drivers() {
     # Canon打印机
     apt-get install -y printer-driver-cnijfilter2 2>/dev/null || print_warn "Canon驱动安装跳过"
     
-    # PostScript/PDF支持
-    apt-get install -y printer-driver-cups-pdf 2>/dev/null || true
-    
     print_msg "打印机驱动安装完成"
 }
 
