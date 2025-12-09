@@ -1,26 +1,21 @@
 #!/bin/bash
-# 生成设备二维码脚本（使用PHP生成一致的设备ID）
+# 生成设备二维码脚本
 # 使用方法: ./generate_qrcode.sh
 
-# 使用 PHP 生成设备ID（与 printer_client.php 一致）
-DEVICE_ID=$(php -r "
-\$machineId = @file_get_contents('/etc/machine-id');
-if (\$machineId) {
-    echo md5(trim(\$machineId));
-} elseif (file_exists('/etc/printer-device-id')) {
-    echo trim(file_get_contents('/etc/printer-device-id'));
-} else {
-    \$mac = trim(shell_exec(\"ip link show | grep -m1 'link/ether' | awk '{print \\\$2}'\"));
-    if (\$mac) {
-        echo md5(\$mac);
-    } else {
-        echo 'error';
-    }
-}
-")
+# 只读取已保存的设备ID（由 printer_client.php 生成）
+if [ -f /etc/printer-device-id ]; then
+    DEVICE_ID=$(cat /etc/printer-device-id)
+else
+    echo "未找到设备ID文件 /etc/printer-device-id"
+    echo "请先启动打印机服务，服务会自动生成设备ID"
+    echo ""
+    echo "  sudo systemctl start websocket-printer"
+    echo ""
+    exit 1
+fi
 
-if [ "$DEVICE_ID" = "error" ] || [ -z "$DEVICE_ID" ]; then
-    echo "无法获取设备ID"
+if [ -z "$DEVICE_ID" ]; then
+    echo "设备ID为空"
     exit 1
 fi
 
