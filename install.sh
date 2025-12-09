@@ -182,20 +182,17 @@ install_cups() {
     systemctl enable cups
     systemctl start cups
     
-    # 配置CUPS（从远程拉取配置文件）
+    # 配置CUPS允许远程管理（可选）
     if [ -f /etc/cups/cupsd.conf ]; then
         # 备份配置
         cp /etc/cups/cupsd.conf /etc/cups/cupsd.conf.bak
         
-        # 从远程下载cupsd.conf配置文件
-        print_msg "从远程下载 CUPS 配置文件..."
-        CUPSD_CONF_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/configs/cupsd.conf"
-        if curl -sSL -o /etc/cups/cupsd.conf "$CUPSD_CONF_URL"; then
-            print_msg "CUPS 配置文件下载成功"
+        # 允许本地网络访问
+        if ! grep -q "Allow @LOCAL" /etc/cups/cupsd.conf; then
+            print_msg "配置 CUPS 允许本地网络访问..."
+            sed -i 's/Listen localhost:631/Listen 0.0.0.0:631/' /etc/cups/cupsd.conf
+            sed -i '/<Location \/>/,/<\/Location>/s/Order allow,deny/Order allow,deny\n  Allow @LOCAL/' /etc/cups/cupsd.conf
             systemctl restart cups
-        else
-            print_warn "CUPS 配置文件下载失败，恢复备份..."
-            cp /etc/cups/cupsd.conf.bak /etc/cups/cupsd.conf
         fi
     fi
     
@@ -226,6 +223,9 @@ install_printer_drivers() {
     
     # Canon打印机
     apt-get install -y printer-driver-cnijfilter2 2>/dev/null || print_warn "Canon驱动安装跳过"
+    
+    # PostScript/PDF支持
+    apt-get install -y printer-driver-cups-pdf 2>/dev/null || true
     
     print_msg "打印机驱动安装完成"
 }
@@ -300,18 +300,50 @@ install_websocket_client() {
     download_files
 }
 
-# 配置服务器地址（使用内置配置，无需用户干预）
+# 配置服务器地址
 configure_server() {
-    print_msg "服务器配置已内置，无需手动配置"
+    print_step "配置服务器连接"
+    
+    # 读取当前配置（从$WS_SERVER变量）
+    CURRENT_SERVER=$(grep -oP "\\\$WS_SERVER = '\K[^']+" "$INSTALL_DIR/printer_client.php" 2>/dev/null || echo "")
+    
+    # 如果已有有效配置，跳过
+    if [ -n "$CURRENT_SERVER" ] && [ "$CURRENT_SERVER" != "ws://your-server:8089" ]; then
+        print_msg "服务器地址已配置: $CURRENT_SERVER"
+        print_msg "如需修改，请编辑: $INSTALL_DIR/printer_client.php"
+        return
+    fi
+    
+    # 使用文件内置的默认服务器地址
+    print_msg "使用内置默认服务器地址"
 }
 
-# 获取设备ID（由 printer_client.php 生成，这里只读取显示）
+# 获取设备ID（与printer_client.php保持一致）
 get_device_id() {
+    # 1. 首先尝试从已保存的文件中读取
     if [ -f /etc/printer-device-id ]; then
-        cat /etc/printer-device-id
-    else
-        echo "待生成"
+        DEVICE_ID=$(cat /etc/printer-device-id)
+        # 验证设备ID格式是否正确
+        if [[ "$DEVICE_ID" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "$DEVICE_ID"
+            return 0
+        fi
     fi
+
+    # 2. 如果文件不存在或ID无效，则生成新的ID
+    # 尝试获取CPU序列号作为设备ID
+    CPU_SERIAL=$(grep -m 1 "Serial" /proc/cpuinfo 2>/dev/null | cut -d":" -f2 | tr -d '[:space:]')
+    if [ -n "$CPU_SERIAL" ] && [ "$CPU_SERIAL" != "0000000000000000" ]; then
+        DEVICE_ID=$(echo "cpu:$CPU_SERIAL" | md5sum | cut -d' ' -f1)
+    else
+        # 如果无法获取CPU序列号，使用随机ID
+        DEVICE_ID=$(cat /proc/sys/kernel/random/uuid | md5sum | cut -d' ' -f1)
+    fi
+
+    # 3. 保存设备ID到文件
+    echo "$DEVICE_ID" > /etc/printer-device-id
+    chmod 644 /etc/printer-device-id
+    echo "$DEVICE_ID"
 }
 
 # 显示设备ID信息
@@ -319,56 +351,19 @@ configure_device_id() {
     print_step "设备ID信息"
     
     DEVICE_ID=$(get_device_id)
-    if [ "$DEVICE_ID" = "待生成" ]; then
-        print_msg "设备ID将在服务首次启动时自动生成"
-    else
-        print_msg "设备ID: $DEVICE_ID"
-    fi
+    print_msg "设备ID: $DEVICE_ID"
+    print_msg "（基于CPU序列号或随机生成）"
 }
 
-# 收集硬件特征（仅收集CPU序列号）
-collect_hw_features() {
-    print_step "收集硬件特征"
-    
-    # 创建临时文件存储硬件特征
-    HW_FEATURES_FILE=$(mktemp)
-    
-    # 仅收集CPU序列号
-    print_msg "仅收集CPU序列号..."
-    
-    # CPU序列号
-    CPU_SERIAL=$(grep -m 1 "Serial" /proc/cpuinfo 2>/dev/null | cut -d":" -f2 | tr -d '[:space:]')
-    if [ -n "$CPU_SERIAL" ] && [ "$CPU_SERIAL" != "0000000000000000" ]; then
-        echo "cpu:$CPU_SERIAL" > "$HW_FEATURES_FILE"
-        print_msg "CPU序列号: $CPU_SERIAL"
-    else
-        # 如果无法获取CPU序列号，使用随机ID
-        RANDOM_ID=$(cat /proc/sys/kernel/random/uuid)
-        echo "random:$RANDOM_ID" > "$HW_FEATURES_FILE"
-        print_warn "使用随机设备ID: $RANDOM_ID"
-    fi
-    
-    echo "$HW_FEATURES_FILE"
-}
-
-# 创建systemd服务（修改版）
+# 创建systemd服务
 create_service() {
     print_step "创建系统服务"
-    
-    # 收集硬件特征
-    HW_FEATURES_FILE=$(collect_hw_features)
-    
-    # 创建环境变量文件存储硬件特征
-    ENV_FILE="/etc/printer-hw-features.conf"
-    echo "$(cat "$HW_FEATURES_FILE")" > "$ENV_FILE"
     
     # 如果下载了service文件，使用它
     if [ -f "$INSTALL_DIR/printer-client.service" ]; then
         print_msg "使用下载的服务配置文件"
         # 更新路径
         sed -i "s|/opt/printer-client|$INSTALL_DIR|g" "$INSTALL_DIR/printer-client.service"
-        # 添加环境变量文件
-        sed -i "/\[Service\]/a EnvironmentFile=$ENV_FILE" "$INSTALL_DIR/printer-client.service"
         cp "$INSTALL_DIR/printer-client.service" /etc/systemd/system/${SERVICE_NAME}.service
     else
         # 否则创建默认配置
@@ -380,7 +375,6 @@ After=network.target cups.service
 
 [Service]
 Type=simple
-EnvironmentFile=$ENV_FILE
 ExecStart=/usr/bin/php $INSTALL_DIR/printer_client.php
 Restart=always
 RestartSec=10
@@ -405,29 +399,6 @@ EOF
     systemctl enable $SERVICE_NAME
     
     print_msg "服务已创建: $SERVICE_NAME"
-}
-
-# 启动服务（修改版）
-start_service() {
-    print_step "启动服务"
-    
-    # 检查硬件特征文件是否存在
-    ENV_FILE="/etc/printer-hw-features.conf"
-    if [ ! -f "$ENV_FILE" ]; then
-        # 如果不存在，重新收集
-        collect_hw_features > "$ENV_FILE"
-    fi
-    
-    # 启动服务
-    systemctl start $SERVICE_NAME
-    sleep 2
-    
-    if systemctl is-active --quiet $SERVICE_NAME; then
-        print_msg "服务启动成功!"
-    else
-        print_error "服务启动失败，查看日志:"
-        tail -20 $LOG_FILE
-    fi
 }
 
 # 检测已连接的打印机
@@ -529,7 +500,7 @@ generate_qrcode() {
         return
     fi
     
-    # 获取设备ID（使用与printer_client.php一致的逻辑）
+    # 从get_device_id函数获取设备ID（与printer_client.php一致）
     DEVICE_ID=$(get_device_id)
     
     if [ -z "$DEVICE_ID" ]; then
@@ -565,8 +536,151 @@ generate_qrcode() {
     fi
 }
 
-# 主入口
-main() {
+# 启动服务
+start_service() {
+    print_step "启动服务"
+    
+    systemctl start $SERVICE_NAME
+    sleep 2
+    
+    if systemctl is-active --quiet $SERVICE_NAME; then
+        print_msg "服务启动成功!"
+    else
+        print_error "服务启动失败，查看日志:"
+        tail -20 $LOG_FILE
+    fi
+}
+
+# 显示安装摘要
+show_summary() {
+    print_step "安装完成"
+    
+    echo ""
+    echo "============================================"
+    echo "  WebSocket 打印客户端安装完成!"
+    echo "============================================"
+    echo ""
+    echo "安装目录: $INSTALL_DIR"
+    echo "日志文件: $LOG_FILE"
+    echo "服务名称: $SERVICE_NAME"
+    echo ""
+    echo "常用命令:"
+    echo "  启动服务: systemctl start $SERVICE_NAME"
+    echo "  停止服务: systemctl stop $SERVICE_NAME"
+    echo "  重启服务: systemctl restart $SERVICE_NAME"
+    echo "  查看状态: systemctl status $SERVICE_NAME"
+    echo "  查看日志: tail -f $LOG_FILE"
+    echo ""
+    echo "CUPS管理: http://$(hostname -I | awk '{print $1}'):631"
+    echo ""
+    
+    # 显示当前状态
+    echo "当前服务状态:"
+    systemctl status $SERVICE_NAME --no-pager -l | head -10
+}
+
+# 卸载函数
+uninstall() {
+    print_step "卸载 WebSocket 打印客户端"
+    
+    read -p "确定要卸载吗? [y/N]: " CONFIRM
+    if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
+        print_msg "取消卸载"
+        exit 0
+    fi
+    
+    # 停止并禁用服务
+    systemctl stop $SERVICE_NAME 2>/dev/null || true
+    systemctl disable $SERVICE_NAME 2>/dev/null || true
+    
+    # 删除服务文件
+    rm -f /etc/systemd/system/${SERVICE_NAME}.service
+    systemctl daemon-reload
+    
+    # 删除安装目录
+    rm -rf $INSTALL_DIR
+    
+    # 删除日志
+    rm -f $LOG_FILE
+    
+    print_msg "卸载完成"
+}
+
+# 主菜单
+show_menu() {
+    echo ""
+    echo "============================================"
+    echo "  WebSocket 打印客户端安装脚本"
+    echo "============================================"
+    echo ""
+    echo "  1. 完整安装 (推荐)"
+    echo "  2. 仅安装依赖"
+    echo "  3. 仅配置客户端"
+    echo "  4. 检测打印机"
+    echo "  5. 添加打印机"
+    echo "  6. 生成设备二维码"
+    echo "  7. 查看服务状态"
+    echo "  8. 卸载"
+    echo "  0. 退出"
+    echo ""
+    read -p "请选择 [0-8]: " MENU_CHOICE
+    
+    case $MENU_CHOICE in
+        1)
+            full_install
+            ;;
+        2)
+            check_root
+            detect_system
+            update_system
+            install_base_deps
+            install_php
+            install_cups
+            install_printer_drivers
+            install_libreoffice
+            print_msg "依赖安装完成"
+            ;;
+        3)
+            check_root
+            install_websocket_client
+            configure_server
+            configure_device_id
+            create_service
+            start_service
+            show_summary
+            ;;
+        4)
+            detect_printers
+            ;;
+        5)
+            check_root
+            add_printer_wizard
+            ;;
+        6)
+            generate_qrcode
+            ;;
+        7)
+            systemctl status $SERVICE_NAME --no-pager -l || print_warn "服务未安装"
+            echo ""
+            echo "最近日志:"
+            tail -20 $LOG_FILE 2>/dev/null || echo "(无日志)"
+            ;;
+        8)
+            check_root
+            uninstall
+            ;;
+        0)
+            exit 0
+            ;;
+        *)
+            print_error "无效选择"
+            show_menu
+            ;;
+    esac
+}
+
+# 完整安装流程
+full_install() {
     check_root
     detect_system
     update_system
@@ -580,9 +694,53 @@ main() {
     configure_device_id
     create_service
     detect_printers
-    add_printer_wizard
-    generate_qrcode
+    
+    echo ""
+    read -p "是否现在添加打印机? [y/N]: " ADD_PRINTER
+    if [ "$ADD_PRINTER" = "y" ] || [ "$ADD_PRINTER" = "Y" ]; then
+        add_printer_wizard
+    fi
+    
     start_service
+    show_summary
+    
+    # 生成二维码
+    echo ""
+    read -p "是否生成设备二维码? [Y/n]: " GEN_QR
+    if [ "$GEN_QR" != "n" ] && [ "$GEN_QR" != "N" ]; then
+        generate_qrcode
+    fi
 }
 
-main
+# 脚本入口
+main() {
+    # 检查参数
+    case "${1:-}" in
+        --install|-i)
+            full_install
+            ;;
+        --uninstall|-u)
+            check_root
+            uninstall
+            ;;
+        --status|-s)
+            systemctl status $SERVICE_NAME --no-pager -l 2>/dev/null || print_warn "服务未安装"
+            ;;
+        --help|-h)
+            echo "用法: $0 [选项]"
+            echo ""
+            echo "选项:"
+            echo "  --install, -i    完整安装"
+            echo "  --uninstall, -u  卸载"
+            echo "  --status, -s     查看状态"
+            echo "  --help, -h       显示帮助"
+            echo ""
+            echo "无参数时显示交互菜单"
+            ;;
+        *)
+            show_menu
+            ;;
+    esac
+}
+
+main "$@"
