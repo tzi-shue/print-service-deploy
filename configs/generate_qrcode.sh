@@ -3,10 +3,10 @@
 # 使用方法: ./generate_qrcode.sh
 
 # 只读取已保存的设备ID（由 printer_client.php 生成）
-if [ -f /data/printer-device-id ]; then
-    DEVICE_ID=$(cat /data/printer-device-id)
+if [ -f /etc/printer-device-id ]; then
+    DEVICE_ID=$(cat /etc/printer-device-id)
 else
-    echo "未找到设备ID文件 /data/printer-device-id"
+    echo "未找到设备ID文件 /etc/printer-device-id"
     echo "请先启动打印机服务，服务会自动生成设备ID"
     echo ""
     echo "  sudo systemctl start websocket-printer"
