@@ -18,23 +18,18 @@ $HEARTBEAT_INTERVAL = $_CFG['h'] ?? 30;
 
 function getDeviceId(): string
 {
-    // 设备ID文件路径（同一次系统安装内持久）
     $idFile = '/etc/printer-device-id';
 
-    // 1. 优先从文件读取已存在的设备ID
     if (file_exists($idFile)) {
         $id = trim(@file_get_contents($idFile) ?: '');
-        // 要求为 32 位十六进制字符串
         if ($id !== '' && preg_match('/^[0-9a-fA-F]{32}$/', $id)) {
             return strtolower($id);
         }
     }
 
-    // 2. 文件不存在或内容无效时，生成一个新的随机ID（32位十六进制）
-    $randomBytes = random_bytes(16);      // 16字节 = 128 bit
-    $deviceId = bin2hex($randomBytes);    // 转成32位hex字符串
+    $randomBytes = random_bytes(16);
+    $deviceId = bin2hex($randomBytes); // 32 hex chars
 
-    // 3. 写入文件以便后续复用
     $saved = @file_put_contents($idFile, $deviceId);
     if ($saved === false) {
         throw new \RuntimeException('无法写入设备ID文件: ' . $idFile);
@@ -721,7 +716,13 @@ class PrinterClient
     
     public function saveOpenid(string $openid): void
     {
-        file_put_contents('/etc/printer-client-openid', $openid);
+        $configFile = '/etc/printer-client-openid';
+        // 如果openid为空，视为解绑，删除本地绑定文件
+        if ($openid === '') {
+            @unlink($configFile);
+            return;
+        }
+        file_put_contents($configFile, $openid);
     }
     
     public function send(array $data)
@@ -862,10 +863,14 @@ class PrinterClient
                 
             case 'bind':
                 $openid = $data['openid'] ?? '';
-                if (!empty($openid)) {
-                    $this->saveOpenid($openid);
+                echo "[bind] 收到openid: " . var_export($openid, true) . "\n";
+                // 无论是否为空都调用 saveOpenid：空表示解绑，非空表示绑定
+                $this->saveOpenid($openid);
+                if ($openid !== '') {
                     echo "设备已绑定到用户: $openid\n";
                     $this->register();
+                } else {
+                    echo "设备已解绑当前用户\n";
                 }
                 break;
                 
