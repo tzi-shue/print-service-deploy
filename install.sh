@@ -330,16 +330,62 @@ get_device_id() {
         fi
     fi
 
-    # 2. 仅使用CPU序列号作为设备ID（严格模式，无CPU序列号则报错）
-    CPU_SERIAL=$(grep -m 1 "Serial" /proc/cpuinfo 2>/dev/null | cut -d":" -f2 | tr -d '[:space:]')
+    # 2. 获取CPU序列号（仅Linux系统）
+    cpuSerial=''
     
-    if [ -z "$CPU_SERIAL" ] || [ "$CPU_SERIAL" = "0000000000000000" ]; then
-        echo "错误：无法获取有效的CPU序列号，无法生成设备ID" >&2
-        return 1
+    # 方法1：尝试标准的Serial字段（适用于大多数x86架构）
+    cpuInfo=$(cat /proc/cpuinfo 2>/dev/null)
+    if [[ $cpuInfo =~ Serial\:\ ([0-9a-fA-F]+) ]]; then
+        cpuSerial=${BASH_REMATCH[1]}
     fi
-
-    DEVICE_ID=$(echo "cpu:$CPU_SERIAL" | md5sum | cut -d' ' -f1)
-
+    
+    # 方法2：ARM架构的CPU信息（适用于树莓派等ARM设备）
+    if [ -z "$cpuSerial" ]; then
+        # 尝试树莓派的方式
+        cpuSerial=$(cat /proc/device-tree/serial-number 2>/dev/null)
+        # 尝试其他ARM设备方式
+        if [ -z "$cpuSerial" ]; then
+            cpuSerial=$(cat /sys/firmware/devicetree/base/serial-number 2>/dev/null)
+        fi
+    fi
+    
+    # 方法3：使用dmidecode（需要root权限，适用于x86架构）
+    if [ -z "$cpuSerial" ] && command -v sudo >/dev/null 2>&1; then
+        dmidecode=$(sudo dmidecode -s system-serial-number 2>/dev/null)
+        if [[ $dmidecode =~ ^[0-9A-Fa-f]+$ ]] && [ "$dmidecode" != "Not Specified" ] && \
+           [ "$dmidecode" != "00000000" ] && [ "$dmidecode" != "To be filled by O.E.M." ]; then
+            cpuSerial=$dmidecode
+        fi
+    fi
+    
+    # 方法4：使用系统UUID作为后备方案（不如CPU序列号唯一，但总比随机好）
+    if [ -z "$cpuSerial" ]; then
+        uuid=$(cat /etc/machine-id 2>/dev/null)
+        if [ -z "$uuid" ]; then
+            uuid=$(cat /var/lib/dbus/machine-id 2>/dev/null)
+        fi
+        cpuSerial=${uuid:-unknown}
+    fi
+    
+    # 最终验证
+    if [ -z "$cpuSerial" ]; then
+        # 如果所有方法都失败，使用临时解决方案
+        cpuSerial="temp-$(date +%s)"
+        echo "警告：无法获取硬件序列号，使用临时标识符" >&2
+    else
+        # 清理输入，只保留有效的十六进制字符（如果看起来像十六进制）
+        if [[ $cpuSerial =~ ^[0-9a-fA-F]+$ ]]; then
+            cpuSerial=$(echo "$cpuSerial" | tr -cd '0-9a-fA-F')
+        fi
+    fi
+    
+    # 确保序列号不为空
+    if [ -z "$cpuSerial" ]; then
+        cpuSerial="unknown"
+    fi
+    
+    DEVICE_ID=$(echo "cpu:$cpuSerial" | md5sum | awk '{print $1}')
+    
     # 3. 保存设备ID到文件
     echo "$DEVICE_ID" > /etc/printer-device-id
     chmod 644 /etc/printer-device-id
