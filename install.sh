@@ -182,17 +182,20 @@ install_cups() {
     systemctl enable cups
     systemctl start cups
     
-    # 配置CUPS允许远程管理（可选）
+    # 配置CUPS（从远程拉取配置文件）
     if [ -f /etc/cups/cupsd.conf ]; then
         # 备份配置
         cp /etc/cups/cupsd.conf /etc/cups/cupsd.conf.bak
         
-        # 允许本地网络访问
-        if ! grep -q "Allow @LOCAL" /etc/cups/cupsd.conf; then
-            print_msg "配置 CUPS 允许本地网络访问..."
-            sed -i 's/Listen localhost:631/Listen 0.0.0.0:631/' /etc/cups/cupsd.conf
-            sed -i '/<Location \/>/,/<\/Location>/s/Order allow,deny/Order allow,deny\n  Allow @LOCAL/' /etc/cups/cupsd.conf
+        # 从远程下载cupsd.conf配置文件
+        print_msg "从远程下载 CUPS 配置文件..."
+        CUPSD_CONF_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/configs/cupsd.conf"
+        if curl -sSL -o /etc/cups/cupsd.conf "$CUPSD_CONF_URL"; then
+            print_msg "CUPS 配置文件下载成功"
             systemctl restart cups
+        else
+            print_warn "CUPS 配置文件下载失败，恢复备份..."
+            cp /etc/cups/cupsd.conf.bak /etc/cups/cupsd.conf
         fi
     fi
     
