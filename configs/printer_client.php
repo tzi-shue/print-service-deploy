@@ -13,7 +13,6 @@ if (file_exists($_CFG_FILE)) {
 
 $_H = base64_decode('eGlucHJpbnQuenlzaGFyZS50b3A=');
 $WS_SERVER = $_CFG['s'] ?? "ws://{$_H}:8089";
-$RECONNECT_INTERVAL = $_CFG['r'] ?? 5;
 function getDeviceId(): string
 {
     // Linux系统专用设备ID文件路径
@@ -36,17 +35,15 @@ function getDeviceId(): string
         $cpuSerial = trim($m[1]);
     }
     
-    // 方法2：ARM架构的CPU信息（适用于树莓派等ARM设备）
-    if (empty($cpuSerial) && stripos(php_uname('m'), 'arm') !== false) {
-        // 尝试获取CPU信息
-        $cpuInfo = @shell_exec('cat /proc/device-tree/serial-number 2>/dev/null');
-        if (empty($cpuInfo)) {
-            $cpuInfo = @shell_exec('cat /sys/firmware/devicetree/base/serial-number 2>/dev/null');
+    // 方法2：尝试从/sys/devices/virtual/dmi/id/product_serial获取（适用于大多数现代Linux）
+    if (empty($cpuSerial)) {
+        $productSerial = @file_get_contents('/sys/devices/virtual/dmi/id/product_serial');
+        if ($productSerial) {
+            $cpuSerial = trim($productSerial);
         }
-        $cpuSerial = trim($cpuInfo ?: '');
     }
     
-    // 方法3：使用dmidecode（需要root权限，适用于x86架构）
+    // 方法3：尝试使用dmidecode（需要root权限）
     if (empty($cpuSerial) && function_exists('shell_exec')) {
         $dmidecode = @shell_exec('sudo dmidecode -s system-serial-number 2>/dev/null');
         if ($dmidecode && !preg_match('/Not Specified|00000000|To be filled by O.E.M./i', $dmidecode)) {
@@ -54,24 +51,56 @@ function getDeviceId(): string
         }
     }
     
-    // 方法4：使用lshw命令（需要root权限）
+    // 方法4：使用主板序列号作为后备方案（如果dmidecode可用）
     if (empty($cpuSerial) && function_exists('shell_exec')) {
-        $lshw = @shell_exec('sudo lshw -json 2>/dev/null');
-        if ($lshw) {
-            $lshwData = json_decode($lshw, true);
-            if ($lshwData && isset($lshwData[0]['system']['serial'])) {
-                $cpuSerial = trim($lshwData[0]['system']['serial']);
+        $boardSerial = @shell_exec('sudo dmidecode -s baseboard-serial-number 2>/dev/null');
+        if ($boardSerial && !preg_match('/Not Specified|00000000|To be filled by O.E.M./i', $boardSerial)) {
+            $cpuSerial = trim($boardSerial);
+        }
+    }
+    
+    // 方法5：使用系统UUID作为后备方案
+    if (empty($cpuSerial)) {
+        // 尝试从多个位置获取UUID
+        $uuidSources = [
+            '/etc/machine-id',
+            '/var/lib/dbus/machine-id',
+            '/proc/sys/kernel/random/boot_id'
+        ];
+        
+        foreach ($uuidSources as $source) {
+            if (file_exists($source)) {
+                $uuid = trim(file_get_contents($source) ?: '');
+                if (!empty($uuid)) {
+                    $cpuSerial = $uuid;
+                    break;
+                }
             }
         }
     }
     
-    // 方法5：使用系统UUID作为后备方案（不如CPU序列号唯一，但总比随机好）
+    // 方法6：终极后备方案 - 使用网络接口的MAC地址
     if (empty($cpuSerial)) {
-        $uuid = @shell_exec('cat /etc/machine-id 2>/dev/null');
-        if (empty($uuid)) {
-            $uuid = @shell_exec('cat /var/lib/dbus/machine-id 2>/dev/null');
+        $macAddresses = [];
+        $interfaces = ['eth0', 'ens33', 'enp0s3', 'wlan0']; // 常见网络接口名
+        
+        foreach ($interfaces as $interface) {
+            $mac = @shell_exec("ip link show $interface 2>/dev/null | grep -oE 'ether ([0-9a-fA-F:]+)' | grep -oE '[0-9a-fA-F:]+'");
+            if ($mac) {
+                $macAddresses[] = str_replace(':', '', $mac); // 移除冒号
+            }
         }
-        $cpuSerial = trim($uuid ?: '');
+        
+        if (!empty($macAddresses)) {
+            // 使用第一个可用的MAC地址
+            $cpuSerial = 'mac-' . substr(md5(implode('-', $macAddresses)), 0, 16);
+        }
+    }
+    
+    // 方法7：如果所有方法都失败，使用时间戳+随机数作为最后手段
+    if (empty($cpuSerial)) {
+        $cpuSerial = 'temp-' . time() . '-' . rand(1000, 9999);
+        error_log("警告：无法获取任何硬件标识符，使用临时标识符: $cpuSerial");
     }
     
     // 最终验证
@@ -1171,4 +1200,3 @@ if ($client->connect()) {
         }
     }
 }
-budao
