@@ -318,78 +318,39 @@ configure_server() {
     print_msg "使用内置默认服务器地址"
 }
 
-# 获取设备ID（与printer_client.php保持一致）
+# 获取设备ID（与printer_client.php保持一致，随机ID + /etc/printer-device-id）
 get_device_id() {
+    local idFile="/etc/printer-device-id"
+
     # 1. 首先尝试从已保存的文件中读取
-    if [ -f /etc/printer-device-id ]; then
-        DEVICE_ID=$(cat /etc/printer-device-id)
-        # 验证设备ID格式是否正确
-        if [[ "$DEVICE_ID" =~ ^[0-9a-f]{32}$ ]]; then
-            echo "$DEVICE_ID"
+    if [ -f "$idFile" ]; then
+        DEVICE_ID=$(cat "$idFile" 2>/dev/null | tr -d '\r\n')
+        # 验证设备ID格式是否为32位十六进制
+        if [[ "$DEVICE_ID" =~ ^[0-9a-fA-F]{32}$ ]]; then
+            echo "${DEVICE_ID,,}"
             return 0
         fi
     fi
 
-    # 2. 获取CPU序列号（仅Linux系统）
-    cpuSerial=''
-    
-    # 方法1：尝试标准的Serial字段（适用于大多数x86架构）
-    cpuInfo=$(cat /proc/cpuinfo 2>/dev/null)
-    if [[ $cpuInfo =~ Serial\:\ ([0-9a-fA-F]+) ]]; then
-        cpuSerial=${BASH_REMATCH[1]}
-    fi
-    
-    # 方法2：ARM架构的CPU信息（适用于树莓派等ARM设备）
-    if [ -z "$cpuSerial" ]; then
-        # 尝试树莓派的方式
-        cpuSerial=$(cat /proc/device-tree/serial-number 2>/dev/null)
-        # 尝试其他ARM设备方式
-        if [ -z "$cpuSerial" ]; then
-            cpuSerial=$(cat /sys/firmware/devicetree/base/serial-number 2>/dev/null)
-        fi
-    fi
-    
-    # 方法3：使用dmidecode（需要root权限，适用于x86架构）
-    if [ -z "$cpuSerial" ] && command -v sudo >/dev/null 2>&1; then
-        dmidecode=$(sudo dmidecode -s system-serial-number 2>/dev/null)
-        if [[ $dmidecode =~ ^[0-9A-Fa-f]+$ ]] && [ "$dmidecode" != "Not Specified" ] && \
-           [ "$dmidecode" != "00000000" ] && [ "$dmidecode" != "To be filled by O.E.M." ]; then
-            cpuSerial=$dmidecode
-        fi
-    fi
-    
-    # 方法4：使用系统UUID作为后备方案（不如CPU序列号唯一，但总比随机好）
-    if [ -z "$cpuSerial" ]; then
-        uuid=$(cat /etc/machine-id 2>/dev/null)
-        if [ -z "$uuid" ]; then
-            uuid=$(cat /var/lib/dbus/machine-id 2>/dev/null)
-        fi
-        cpuSerial=${uuid:-unknown}
-    fi
-    
-    # 最终验证
-    if [ -z "$cpuSerial" ]; then
-        # 如果所有方法都失败，使用临时解决方案
-        cpuSerial="temp-$(date +%s)"
-        echo "警告：无法获取硬件序列号，使用临时标识符" >&2
+    # 2. 文件不存在或内容不合法时，生成一个新的随机ID（32位十六进制）
+    if command -v openssl >/dev/null 2>&1; then
+        DEVICE_ID=$(openssl rand -hex 16 2>/dev/null)
     else
-        # 清理输入，只保留有效的十六进制字符（如果看起来像十六进制）
-        if [[ $cpuSerial =~ ^[0-9a-fA-F]+$ ]]; then
-            cpuSerial=$(echo "$cpuSerial" | tr -cd '0-9a-fA-F')
-        fi
+        # 退化方案：使用 /dev/urandom 生成
+        DEVICE_ID=$(head -c 16 /dev/urandom | hexdump -e '16/1 "%02x" "\n"' 2>/dev/null)
     fi
-    
-    # 确保序列号不为空
-    if [ -z "$cpuSerial" ]; then
-        cpuSerial="unknown"
+
+    # 再次校验生成的ID
+    if [[ -z "$DEVICE_ID" || ! "$DEVICE_ID" =~ ^[0-9a-fA-F]{32}$ ]]; then
+        echo ""  # 返回空表示失败
+        return 1
     fi
-    
-    DEVICE_ID=$(echo "cpu:$cpuSerial" | md5sum | awk '{print $1}')
-    
+
     # 3. 保存设备ID到文件
-    echo "$DEVICE_ID" > /etc/printer-device-id
-    chmod 644 /etc/printer-device-id
-    echo "$DEVICE_ID"
+    echo "${DEVICE_ID,,}" > "$idFile" 2>/dev/null || return 1
+    chmod 644 "$idFile" 2>/dev/null || true
+
+    echo "${DEVICE_ID,,}"
 }
 
 # 显示设备ID信息
@@ -397,13 +358,13 @@ configure_device_id() {
     print_step "设备ID信息"
     
     DEVICE_ID=$(get_device_id)
-    if [ $? -ne 0 ]; then
-        print_error "设备ID生成失败：无法获取有效的CPU序列号"
+    if [ -z "$DEVICE_ID" ]; then
+        print_error "设备ID生成失败：无法生成或保存随机设备ID"
         return 1
     fi
     
     print_msg "设备ID: $DEVICE_ID"
-    print_msg "（基于CPU序列号生成）"
+    print_msg "（随机生成并保存在 /etc/printer-device-id）"
 }
 
 # 创建systemd服务
