@@ -13,12 +13,13 @@ if (file_exists($_CFG_FILE)) {
 
 $_H = base64_decode('eGlucHJpbnQuenlzaGFyZS50b3A=');
 $WS_SERVER = $_CFG['s'] ?? "ws://{$_H}:8089";
+$RECONNECT_INTERVAL = $_CFG['r'] ?? 5;
+$HEARTBEAT_INTERVAL = $_CFG['h'] ?? 30;
+
 function getDeviceId(): string
 {
-    // Linux系统专用设备ID文件路径
     $idFile = '/etc/printer-device-id';
 
-    // 1. 如果文件中已经有设备ID，直接使用（保证重启/重装后不变）
     if (file_exists($idFile)) {
         $id = trim(@file_get_contents($idFile) ?: '');
         if (!empty($id) && strlen($id) === 32) {
@@ -26,48 +27,41 @@ function getDeviceId(): string
         }
     }
 
-    // 2. 获取CPU序列号（仅Linux系统）
     $cpuSerial = '';
-    
-    // 方法1：尝试标准的Serial字段（适用于大多数x86架构）
+
     $cpuInfo = @file_get_contents('/proc/cpuinfo');
     if ($cpuInfo && preg_match('/Serial\s*:\s*([0-9a-fA-F]+)/i', $cpuInfo, $m)) {
         $cpuSerial = trim($m[1]);
     }
-    
-    // 方法2：尝试从/sys/devices/virtual/dmi/id/product_serial获取（适用于大多数现代Linux）
+
     if (empty($cpuSerial)) {
         $productSerial = @file_get_contents('/sys/devices/virtual/dmi/id/product_serial');
         if ($productSerial) {
             $cpuSerial = trim($productSerial);
         }
     }
-    
-    // 方法3：尝试使用dmidecode（需要root权限）
+
     if (empty($cpuSerial) && function_exists('shell_exec')) {
         $dmidecode = @shell_exec('sudo dmidecode -s system-serial-number 2>/dev/null');
         if ($dmidecode && !preg_match('/Not Specified|00000000|To be filled by O.E.M./i', $dmidecode)) {
             $cpuSerial = trim($dmidecode);
         }
     }
-    
-    // 方法4：使用主板序列号作为后备方案（如果dmidecode可用）
+
     if (empty($cpuSerial) && function_exists('shell_exec')) {
         $boardSerial = @shell_exec('sudo dmidecode -s baseboard-serial-number 2>/dev/null');
         if ($boardSerial && !preg_match('/Not Specified|00000000|To be filled by O.E.M./i', $boardSerial)) {
             $cpuSerial = trim($boardSerial);
         }
     }
-    
-    // 方法5：使用系统UUID作为后备方案
+
     if (empty($cpuSerial)) {
-        // 尝试从多个位置获取UUID
         $uuidSources = [
             '/etc/machine-id',
             '/var/lib/dbus/machine-id',
             '/proc/sys/kernel/random/boot_id'
         ];
-        
+
         foreach ($uuidSources as $source) {
             if (file_exists($source)) {
                 $uuid = trim(file_get_contents($source) ?: '');
@@ -78,53 +72,44 @@ function getDeviceId(): string
             }
         }
     }
-    
-    // 方法6：终极后备方案 - 使用网络接口的MAC地址
+
     if (empty($cpuSerial)) {
         $macAddresses = [];
-        $interfaces = ['eth0', 'ens33', 'enp0s3', 'wlan0']; // 常见网络接口名
-        
+        $interfaces = ['eth0', 'ens33', 'enp0s3', 'wlan0'];
+
         foreach ($interfaces as $interface) {
             $mac = @shell_exec("ip link show $interface 2>/dev/null | grep -oE 'ether ([0-9a-fA-F:]+)' | grep -oE '[0-9a-fA-F:]+'");
             if ($mac) {
-                $macAddresses[] = str_replace(':', '', $mac); // 移除冒号
+                $macAddresses[] = str_replace(':', '', $mac);
             }
         }
-        
+
         if (!empty($macAddresses)) {
-            // 使用第一个可用的MAC地址
             $cpuSerial = 'mac-' . substr(md5(implode('-', $macAddresses)), 0, 16);
         }
     }
-    
-    // 方法7：如果所有方法都失败，使用时间戳+随机数作为最后手段
+
     if (empty($cpuSerial)) {
         $cpuSerial = 'temp-' . time() . '-' . rand(1000, 9999);
         error_log("警告：无法获取任何硬件标识符，使用临时标识符: $cpuSerial");
     }
-    
-    // 最终验证
+
     if (empty($cpuSerial)) {
-        // 如果所有方法都失败，使用临时解决方案
         $cpuSerial = uniqid('temp-', true);
         error_log("警告：无法获取硬件序列号，使用临时标识符: $cpuSerial");
     } else {
-        // 清理输入，只保留有效的十六进制字符
         $cpuSerial = preg_replace('/[^0-9a-fA-F]/', '', $cpuSerial);
-        // 如果清理后为空，使用临时方案
         if (empty($cpuSerial)) {
             $cpuSerial = uniqid('temp-', true);
         }
     }
 
-    // 确保序列号不为空
     if (empty($cpuSerial)) {
         $cpuSerial = 'unknown';
     }
 
     $deviceId = md5('cpu:' . strtolower($cpuSerial));
 
-    // 3. 保存设备ID到文件
     $saved = @file_put_contents($idFile, $deviceId);
     if ($saved !== false) {
         @chmod($idFile, 0644);
