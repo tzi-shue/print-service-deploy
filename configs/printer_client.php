@@ -18,103 +18,59 @@ $HEARTBEAT_INTERVAL = $_CFG['h'] ?? 30;
 
 function getDeviceId(): string
 {
+    // 优先使用已保存的设备ID（确保重启后ID不变）
     $idFile = '/etc/printer-device-id';
-
     if (file_exists($idFile)) {
-        $id = trim(@file_get_contents($idFile) ?: '');
-        if (!empty($id) && strlen($id) === 32) {
+        $id = trim(file_get_contents($idFile));
+        if (!empty($id)) {
             return $id;
         }
     }
-
+    
+    // 基于硬件特征生成唯一且固定的设备ID
     $cpuSerial = '';
-
+    $diskSerial = '';
+    $boardSerial = '';
+    $macAddr = '';
+    
+    // 1. CPU序列号（树莓派等ARM设备有唯一序列号）
     $cpuInfo = @file_get_contents('/proc/cpuinfo');
-    if ($cpuInfo && preg_match('/Serial\s*:\s*([0-9a-fA-F]+)/i', $cpuInfo, $m)) {
+    if ($cpuInfo && preg_match('/Serial\s*:\s*(\S+)/i', $cpuInfo, $m)) {
         $cpuSerial = trim($m[1]);
     }
-
-    if (empty($cpuSerial)) {
-        $productSerial = @file_get_contents('/sys/devices/virtual/dmi/id/product_serial');
-        if ($productSerial) {
-            $cpuSerial = trim($productSerial);
+    
+    // 2. 磁盘序列号
+    $diskSerial = trim(@shell_exec("lsblk -o SERIAL -n 2>/dev/null | grep -v '^$' | head -1") ?: '');
+    if (empty($diskSerial)) {
+        // 尝试从 /dev/disk/by-id 获取
+        $diskId = trim(@shell_exec("ls -la /dev/disk/by-id/ 2>/dev/null | grep -v 'part\\|wwn' | head -2 | tail -1 | awk '{print \$NF}' | xargs basename 2>/dev/null") ?: '');
+        if (!empty($diskId)) {
+            $diskSerial = $diskId;
         }
     }
-
-    if (empty($cpuSerial) && function_exists('shell_exec')) {
-        $dmidecode = @shell_exec('sudo dmidecode -s system-serial-number 2>/dev/null');
-        if ($dmidecode && !preg_match('/Not Specified|00000000|To be filled by O.E.M./i', $dmidecode)) {
-            $cpuSerial = trim($dmidecode);
-        }
+    
+    // 3. 主板序列号
+    $boardSerial = trim(@file_get_contents('/sys/class/dmi/id/board_serial') ?: '');
+    if (empty($boardSerial)) {
+        $boardSerial = trim(@file_get_contents('/sys/class/dmi/id/product_serial') ?: '');
     }
-
-    if (empty($cpuSerial) && function_exists('shell_exec')) {
-        $boardSerial = @shell_exec('sudo dmidecode -s baseboard-serial-number 2>/dev/null');
-        if ($boardSerial && !preg_match('/Not Specified|00000000|To be filled by O.E.M./i', $boardSerial)) {
-            $cpuSerial = trim($boardSerial);
-        }
+    
+    // 4. MAC地址
+    $macAddr = trim(@shell_exec("ip link show | grep -m1 'link/ether' | awk '{print \$2}'") ?: '');
+    
+    // 组合所有硬件特征
+    $combined = $cpuSerial . $diskSerial . $boardSerial . $macAddr;
+    
+    if (empty($combined)) {
+        throw new Exception('无法获取硬件特征');
     }
-
-    if (empty($cpuSerial)) {
-        $uuidSources = [
-            '/etc/machine-id',
-            '/var/lib/dbus/machine-id',
-            '/proc/sys/kernel/random/boot_id'
-        ];
-
-        foreach ($uuidSources as $source) {
-            if (file_exists($source)) {
-                $uuid = trim(file_get_contents($source) ?: '');
-                if (!empty($uuid)) {
-                    $cpuSerial = $uuid;
-                    break;
-                }
-            }
-        }
-    }
-
-    if (empty($cpuSerial)) {
-        $macAddresses = [];
-        $interfaces = ['eth0', 'ens33', 'enp0s3', 'wlan0'];
-
-        foreach ($interfaces as $interface) {
-            $mac = @shell_exec("ip link show $interface 2>/dev/null | grep -oE 'ether ([0-9a-fA-F:]+)' | grep -oE '[0-9a-fA-F:]+'");
-            if ($mac) {
-                $macAddresses[] = str_replace(':', '', $mac);
-            }
-        }
-
-        if (!empty($macAddresses)) {
-            $cpuSerial = 'mac-' . substr(md5(implode('-', $macAddresses)), 0, 16);
-        }
-    }
-
-    if (empty($cpuSerial)) {
-        $cpuSerial = 'temp-' . time() . '-' . rand(1000, 9999);
-        error_log("警告：无法获取任何硬件标识符，使用临时标识符: $cpuSerial");
-    }
-
-    if (empty($cpuSerial)) {
-        $cpuSerial = uniqid('temp-', true);
-        error_log("警告：无法获取硬件序列号，使用临时标识符: $cpuSerial");
-    } else {
-        $cpuSerial = preg_replace('/[^0-9a-fA-F]/', '', $cpuSerial);
-        if (empty($cpuSerial)) {
-            $cpuSerial = uniqid('temp-', true);
-        }
-    }
-
-    if (empty($cpuSerial)) {
-        $cpuSerial = 'unknown';
-    }
-
-    $deviceId = md5('cpu:' . strtolower($cpuSerial));
-
-    $saved = @file_put_contents($idFile, $deviceId);
-    if ($saved !== false) {
-        @chmod($idFile, 0644);
-    }
-
+    
+    $deviceId = md5($combined);
+    
+    // 保存设备ID到文件
+    @file_put_contents($idFile, $deviceId);
+    @chmod($idFile, 0644);
+    
     return $deviceId;
 }
 
