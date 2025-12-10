@@ -364,7 +364,6 @@ configure_device_id() {
     fi
     
     print_msg "设备ID: $DEVICE_ID"
-    print_msg "（随机生成并保存在 /etc/printer-device-id）"
 }
 
 # 创建systemd服务
