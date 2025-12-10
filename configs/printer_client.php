@@ -18,7 +18,7 @@ $HEARTBEAT_INTERVAL = $_CFG['h'] ?? 30;
 
 function getDeviceId(): string
 {
-    $idFile = '/data/printer-device-id';
+    $idFile = '/etc/printer-device-id';
 
     // 1. 优先从文件读取已存在的设备ID，保证同一次系统安装内稳定
     if (file_exists($idFile)) {
@@ -1110,3 +1110,4 @@ if ($client->connect()) {
         }
     }
 }
+
