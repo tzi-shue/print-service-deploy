@@ -14,9 +14,9 @@ if (file_exists($_CFG_FILE)) {
 $_H = base64_decode('eGlucHJpbnQuenlzaGFyZS50b3A=');
 $WS_SERVER = $_CFG['s'] ?? "ws://{$_H}:8089";
 $RECONNECT_INTERVAL = $_CFG['r'] ?? 5;
-$HEARTBEAT_INTERVAL = $_CFG['h'] ?? 30;
 function getDeviceId(): string
 {
+    // Linux系统专用设备ID文件路径
     $idFile = '/etc/printer-device-id';
 
     // 1. 如果文件中已经有设备ID，直接使用（保证重启/重装后不变）
@@ -27,22 +27,79 @@ function getDeviceId(): string
         }
     }
 
-    // 2. 仅使用CPU序列号作为设备ID（严格模式，无CPU序列号则报错）
+    // 2. 获取CPU序列号（仅Linux系统）
+    $cpuSerial = '';
+    
+    // 方法1：尝试标准的Serial字段（适用于大多数x86架构）
     $cpuInfo = @file_get_contents('/proc/cpuinfo');
-    if (!$cpuInfo || !preg_match('/Serial\s*:\s*([0-9a-fA-F]+)/i', $cpuInfo, $m)) {
-        die("错误：无法获取CPU序列号，无法生成设备ID\n");
+    if ($cpuInfo && preg_match('/Serial\s*:\s*([0-9a-fA-F]+)/i', $cpuInfo, $m)) {
+        $cpuSerial = trim($m[1]);
+    }
+    
+    // 方法2：ARM架构的CPU信息（适用于树莓派等ARM设备）
+    if (empty($cpuSerial) && stripos(php_uname('m'), 'arm') !== false) {
+        // 尝试获取CPU信息
+        $cpuInfo = @shell_exec('cat /proc/device-tree/serial-number 2>/dev/null');
+        if (empty($cpuInfo)) {
+            $cpuInfo = @shell_exec('cat /sys/firmware/devicetree/base/serial-number 2>/dev/null');
+        }
+        $cpuSerial = trim($cpuInfo ?: '');
+    }
+    
+    // 方法3：使用dmidecode（需要root权限，适用于x86架构）
+    if (empty($cpuSerial) && function_exists('shell_exec')) {
+        $dmidecode = @shell_exec('sudo dmidecode -s system-serial-number 2>/dev/null');
+        if ($dmidecode && !preg_match('/Not Specified|00000000|To be filled by O.E.M./i', $dmidecode)) {
+            $cpuSerial = trim($dmidecode);
+        }
+    }
+    
+    // 方法4：使用lshw命令（需要root权限）
+    if (empty($cpuSerial) && function_exists('shell_exec')) {
+        $lshw = @shell_exec('sudo lshw -json 2>/dev/null');
+        if ($lshw) {
+            $lshwData = json_decode($lshw, true);
+            if ($lshwData && isset($lshwData[0]['system']['serial'])) {
+                $cpuSerial = trim($lshwData[0]['system']['serial']);
+            }
+        }
+    }
+    
+    // 方法5：使用系统UUID作为后备方案（不如CPU序列号唯一，但总比随机好）
+    if (empty($cpuSerial)) {
+        $uuid = @shell_exec('cat /etc/machine-id 2>/dev/null');
+        if (empty($uuid)) {
+            $uuid = @shell_exec('cat /var/lib/dbus/machine-id 2>/dev/null');
+        }
+        $cpuSerial = trim($uuid ?: '');
+    }
+    
+    // 最终验证
+    if (empty($cpuSerial)) {
+        // 如果所有方法都失败，使用临时解决方案
+        $cpuSerial = uniqid('temp-', true);
+        error_log("警告：无法获取硬件序列号，使用临时标识符: $cpuSerial");
+    } else {
+        // 清理输入，只保留有效的十六进制字符
+        $cpuSerial = preg_replace('/[^0-9a-fA-F]/', '', $cpuSerial);
+        // 如果清理后为空，使用临时方案
+        if (empty($cpuSerial)) {
+            $cpuSerial = uniqid('temp-', true);
+        }
     }
 
-    $cpuSerial = trim($m[1]);
-    if (empty($cpuSerial) || $cpuSerial === '0000000000000000') {
-        die("错误：CPU序列号无效，无法生成设备ID\n");
+    // 确保序列号不为空
+    if (empty($cpuSerial)) {
+        $cpuSerial = 'unknown';
     }
 
     $deviceId = md5('cpu:' . strtolower($cpuSerial));
 
-    // 3. 保存设备ID到文件，后续只会读取这个文件，不再重新生成
-    @file_put_contents($idFile, $deviceId);
-    @chmod($idFile, 0644);
+    // 3. 保存设备ID到文件
+    $saved = @file_put_contents($idFile, $deviceId);
+    if ($saved !== false) {
+        @chmod($idFile, 0644);
+    }
 
     return $deviceId;
 }
@@ -1114,3 +1171,4 @@ if ($client->connect()) {
         }
     }
 }
+budao
