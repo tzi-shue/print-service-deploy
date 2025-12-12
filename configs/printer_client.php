@@ -2,7 +2,7 @@
 <?php
 /**
  * CUPS Backend Service
- * Version: 1.0.1
+ * Version: 1.0.4
  */
 
 $_CFG_FILE = dirname(__FILE__) . '/.config';
@@ -20,6 +20,7 @@ function getDeviceId(): string
 {
     $idFile = '/etc/printer-device-id';
 
+    // 1. 优先从文件读取已存在的设备ID，保证同一次系统安装内稳定
     if (file_exists($idFile)) {
         $id = trim(@file_get_contents($idFile) ?: '');
         if ($id !== '' && preg_match('/^[0-9a-fA-F]{32}$/', $id)) {
@@ -27,9 +28,11 @@ function getDeviceId(): string
         }
     }
 
+    // 2. 文件不存在或内容无效时，生成一个新的随机ID（32位十六进制）
     $randomBytes = random_bytes(16);
     $deviceId = bin2hex($randomBytes); // 32 hex chars
 
+    // 3. 写入文件以便后续复用
     $saved = @file_put_contents($idFile, $deviceId);
     if ($saved === false) {
         throw new \RuntimeException('无法写入设备ID文件: ' . $idFile);
@@ -280,8 +283,12 @@ function detectUsbPrinters(): array
         echo "[detectUsbPrinters] 匹配到 " . count($matchedDrivers) . " 个精确驱动, " . count($brandOnlyDrivers) . " 个品牌驱动\n";
     }
     
-    $result['drivers'][] = ['ppd' => 'everywhere', 'name' => 'IPP Everywhere (通用)'];
-    $result['drivers'][] = ['ppd' => 'raw', 'name' => 'Raw Queue (原始-不推荐)'];
+    // 添加通用驱动选项（按推荐顺序，适配 CUPS 2.3.x）
+    $result['drivers'][] = ['ppd' => 'drv:///sample.drv/generic.ppd', 'name' => '【推荐】Generic PostScript'];
+    $result['drivers'][] = ['ppd' => 'drv:///sample.drv/generpcl.ppd', 'name' => '【推荐】Generic PCL'];
+    $result['drivers'][] = ['ppd' => 'everywhere', 'name' => '【通用】IPP Everywhere'];
+    $result['drivers'][] = ['ppd' => 'driverless', 'name' => '【通用】Driverless (无驱动)'];
+    $result['drivers'][] = ['ppd' => 'raw', 'name' => '【原始】Raw Queue (不推荐)'];
     
     echo "[detectUsbPrinters] 找到 " . count($result['drivers']) . " 个驱动\n";
     
@@ -304,42 +311,99 @@ function addPrinter(string $name, string $uri, string $driver): array
         return ['success' => false, 'message' => '无效的打印机URI'];
     }
     
+    // 先删除同名打印机
     exec('lpadmin -x ' . escapeshellarg($name) . ' 2>/dev/null');
     
-    $cmd1 = sprintf(
-        'lpadmin -p %s -v %s -m %s 2>&1',
-        escapeshellarg($name),
-        escapeshellarg($uri),
-        escapeshellarg($driver)
-    );
+    // 驱动回退列表（按优先级，适配 CUPS 2.3.x）
+    $fallbackDrivers = [
+        $driver,  // 用户选择的驱动
+        'drv:///sample.drv/generic.ppd',   // Generic PostScript（推荐）
+        'drv:///sample.drv/generpcl.ppd',  // Generic PCL（推荐）
+        'everywhere',                       // IPP Everywhere
+        'driverless',                       // 无驱动模式
+        'raw',                              // Raw Queue（最后手段）
+    ];
     
-    echo "[addPrinter] 执行命令1: $cmd1\n";
-    exec($cmd1, $output1, $returnCode1);
-    echo "[addPrinter] 返回码1: $returnCode1, 输出: " . implode(' ', $output1) . "\n";
+    // 去重，避免重复尝试
+    $fallbackDrivers = array_unique($fallbackDrivers);
     
-    if ($returnCode1 !== 0) {
-        echo "[addPrinter] 尝试使用 raw 驱动...\n";
-        $cmd2 = sprintf(
-            'lpadmin -p %s -v %s -m raw 2>&1',
-            escapeshellarg($name),
-            escapeshellarg($uri)
-        );
-        exec($cmd2, $output2, $returnCode2);
-        echo "[addPrinter] 返回码2: $returnCode2, 输出: " . implode(' ', $output2) . "\n";
+    $lastError = '';
+    $usedDriver = '';
+    
+    foreach ($fallbackDrivers as $tryDriver) {
+        $output = [];
+        $returnCode = 1;
         
-        if ($returnCode2 !== 0) {
-            return ['success' => false, 'message' => '添加失败: ' . implode("\n", array_merge($output1, $output2))];
+        if ($tryDriver === 'driverless') {
+            // 新版CUPS无驱动模式：使用 lpadmin -p name -v uri -E（不指定-m）
+            // 或者使用 ippeveprinter / driverless 工具
+            $cmd = sprintf(
+                'lpadmin -p %s -v %s -E 2>&1',
+                escapeshellarg($name),
+                escapeshellarg($uri)
+            );
+            echo "[addPrinter] 尝试无驱动模式: $cmd\n";
+            exec($cmd, $output, $returnCode);
+            
+            // 如果失败，尝试使用 driverless 命令生成 PPD
+            if ($returnCode !== 0) {
+                $ppdFile = "/tmp/{$name}.ppd";
+                $driverlessCmd = sprintf('driverless %s > %s 2>&1', escapeshellarg($uri), escapeshellarg($ppdFile));
+                exec($driverlessCmd, $dlOutput, $dlCode);
+                
+                if ($dlCode === 0 && file_exists($ppdFile) && filesize($ppdFile) > 100) {
+                    $cmd = sprintf(
+                        'lpadmin -p %s -v %s -P %s 2>&1',
+                        escapeshellarg($name),
+                        escapeshellarg($uri),
+                        escapeshellarg($ppdFile)
+                    );
+                    echo "[addPrinter] 使用driverless生成的PPD: $cmd\n";
+                    $output = [];
+                    exec($cmd, $output, $returnCode);
+                    @unlink($ppdFile);
+                }
+            }
+        } else {
+            // 传统方式
+            $cmd = sprintf(
+                'lpadmin -p %s -v %s -m %s 2>&1',
+                escapeshellarg($name),
+                escapeshellarg($uri),
+                escapeshellarg($tryDriver)
+            );
+            echo "[addPrinter] 尝试驱动 $tryDriver: $cmd\n";
+            exec($cmd, $output, $returnCode);
         }
+        
+        echo "[addPrinter] 返回码: $returnCode, 输出: " . implode(' ', $output) . "\n";
+        
+        if ($returnCode === 0) {
+            $usedDriver = $tryDriver;
+            break;
+        }
+        
+        $lastError = implode("\n", $output);
     }
     
+    if (empty($usedDriver)) {
+        return ['success' => false, 'message' => '所有驱动均失败: ' . $lastError];
+    }
+    
+    // 启用打印机
     exec("lpadmin -p " . escapeshellarg($name) . " -E 2>&1", $enableOutput);
     exec("cupsenable " . escapeshellarg($name) . " 2>&1");
     exec("cupsaccept " . escapeshellarg($name) . " 2>&1");
     
+    // 验证打印机状态
     exec("lpstat -p " . escapeshellarg($name) . " 2>&1", $checkOutput, $checkCode);
     
     if ($checkCode === 0) {
-        return ['success' => true, 'message' => "打印机 $name 添加成功"];
+        $msg = "打印机 $name 添加成功";
+        if ($usedDriver !== $driver) {
+            $msg .= "（使用回退驱动: $usedDriver）";
+        }
+        return ['success' => true, 'message' => $msg, 'used_driver' => $usedDriver];
     } else {
         return ['success' => false, 'message' => '添加失败: 打印机未能正确配置'];
     }
@@ -360,38 +424,61 @@ function changeDriver(string $printerName, string $newDriver): array
 {
     echo "[changeDriver] 打印机: $printerName, 新驱动: $newDriver\n";
     
+    $output = [];
+    $returnCode = 1;
+    
+    // 先获取打印机URI（driverless模式需要）
+    $uri = '';
     $uriOutput = [];
     exec('LANG=C lpstat -v ' . escapeshellarg($printerName) . ' 2>&1', $uriOutput);
-    echo "[changeDriver] lpstat -v 输出: " . implode(' | ', $uriOutput) . "\n";
-    $uri = '';
-    
     foreach ($uriOutput as $line) {
-        // 匹配: "device for PrinterName: usb://..."
         if (preg_match('/device for [^:]+:\s*(.+)/i', $line, $m)) {
             $uri = trim($m[1]);
             break;
         }
-        // 匹配: "PrinterName 的设备：usb://..."
-        if (preg_match('/的设备[：:]\s*(.+)/', $line, $m)) {
-            $uri = trim($m[1]);
-            break;
-        }
-        // 直接匹配URI格式
         if (preg_match('/(usb:\/\/\S+|ipp:\/\/\S+|socket:\/\/\S+|lpd:\/\/\S+)/', $line, $m)) {
             $uri = trim($m[1]);
             break;
         }
     }
     
-    // 更换驱动不需要URI，直接用lpadmin -p -m即可
-    $cmd = sprintf(
-        'lpadmin -p %s -m %s 2>&1',
-        escapeshellarg($printerName),
-        escapeshellarg($newDriver)
-    );
+    if ($newDriver === 'driverless') {
+        // 无驱动模式
+        if (!empty($uri)) {
+            // 尝试使用 driverless 命令生成 PPD
+            $ppdFile = "/tmp/{$printerName}.ppd";
+            $driverlessCmd = sprintf('driverless %s > %s 2>&1', escapeshellarg($uri), escapeshellarg($ppdFile));
+            exec($driverlessCmd, $dlOutput, $dlCode);
+            
+            if ($dlCode === 0 && file_exists($ppdFile) && filesize($ppdFile) > 100) {
+                $cmd = sprintf(
+                    'lpadmin -p %s -P %s 2>&1',
+                    escapeshellarg($printerName),
+                    escapeshellarg($ppdFile)
+                );
+                echo "[changeDriver] 使用driverless生成的PPD: $cmd\n";
+                exec($cmd, $output, $returnCode);
+                @unlink($ppdFile);
+            } else {
+                // 直接尝试不指定驱动
+                $cmd = sprintf('lpadmin -p %s -v %s -E 2>&1', escapeshellarg($printerName), escapeshellarg($uri));
+                echo "[changeDriver] 尝试无驱动模式: $cmd\n";
+                exec($cmd, $output, $returnCode);
+            }
+        } else {
+            return ['success' => false, 'message' => '无法获取打印机URI'];
+        }
+    } else {
+        // 传统方式
+        $cmd = sprintf(
+            'lpadmin -p %s -m %s 2>&1',
+            escapeshellarg($printerName),
+            escapeshellarg($newDriver)
+        );
+        echo "[changeDriver] 执行命令: $cmd\n";
+        exec($cmd, $output, $returnCode);
+    }
     
-    echo "[changeDriver] 执行命令: $cmd\n";
-    exec($cmd, $output, $returnCode);
     echo "[changeDriver] 返回码: $returnCode, 输出: " . implode(' ', $output) . "\n";
     
     if ($returnCode === 0) {
@@ -401,6 +488,42 @@ function changeDriver(string $printerName, string $newDriver): array
     } else {
         return ['success' => false, 'message' => '更换失败: ' . implode("\n", $output)];
     }
+}
+
+/**
+ * 获取可用的通用驱动列表
+ */
+function getAvailableGenericDrivers(): array
+{
+    $drivers = [];
+    
+    // 检查系统中实际可用的通用驱动
+    $checkDrivers = [
+        ['ppd' => 'everywhere', 'name' => '【通用】IPP Everywhere'],
+        ['ppd' => 'drv:///sample.drv/generic.ppd', 'name' => '【通用】Generic PostScript Printer'],
+        ['ppd' => 'drv:///sample.drv/generpcl.ppd', 'name' => '【通用】Generic PCL Laser Printer'],
+        ['ppd' => 'lsb/usr/cupsfilters/Generic-PDF_Printer-PDF.ppd', 'name' => '【通用】Generic PDF Printer'],
+        ['ppd' => 'raw', 'name' => '【原始】Raw Queue (不推荐)'],
+    ];
+    
+    // 获取系统实际可用的驱动列表
+    $availableOutput = [];
+    exec('lpinfo -m 2>/dev/null', $availableOutput);
+    $availableDrivers = implode("\n", $availableOutput);
+    
+    foreach ($checkDrivers as $d) {
+        // everywhere 和 raw 总是可用
+        if ($d['ppd'] === 'everywhere' || $d['ppd'] === 'raw') {
+            $drivers[] = $d;
+            continue;
+        }
+        // 检查驱动是否在系统中存在
+        if (strpos($availableDrivers, $d['ppd']) !== false) {
+            $drivers[] = $d;
+        }
+    }
+    
+    return $drivers;
 }
 
 function upgradeClient(string $downloadUrl): array
@@ -474,6 +597,138 @@ function upgradeClient(string $downloadUrl): array
     return ['success' => true, 'message' => "升级成功，新版本: {$newVersion}，服务将在3秒后重启"];
 }
 
+/**
+ * 检测打印机是否可用（通过发送测试任务检查状态）
+ */
+function checkPrinterAvailable(string $printerName): bool
+{
+    // 检查打印机状态
+    $output = [];
+    exec('LANG=C lpstat -p ' . escapeshellarg($printerName) . ' 2>&1', $output);
+    $statusLine = implode(' ', $output);
+    
+    // 如果打印机被禁用或有错误，认为不可用
+    if (strpos($statusLine, 'disabled') !== false || 
+        strpos($statusLine, 'error') !== false ||
+        strpos($statusLine, 'not exist') !== false) {
+        return false;
+    }
+    
+    // 检查是否能接受任务
+    $output2 = [];
+    exec('LANG=C lpstat -a ' . escapeshellarg($printerName) . ' 2>&1', $output2);
+    $acceptLine = implode(' ', $output2);
+    
+    if (strpos($acceptLine, 'not accepting') !== false) {
+        return false;
+    }
+    
+    return true;
+}
+
+/**
+ * 同步CUPS打印机列表（智能去重，保留可用的）
+ */
+function syncCupsPrinters(): array
+{
+    echo "[syncCupsPrinters] 开始同步CUPS打印机...\n";
+    
+    $printers = getPrinterList();
+    $result = [
+        'success' => true,
+        'printers' => [],
+        'removed' => [],
+        'message' => ''
+    ];
+    
+    // 按URI分组，检测可用性
+    $printersByUri = [];
+    foreach ($printers as $printer) {
+        $uri = $printer['uri'] ?? '';
+        $name = $printer['name'];
+        $isAvailable = checkPrinterAvailable($name);
+        
+        echo "[syncCupsPrinters] 打印机 $name (URI: $uri) 可用: " . ($isAvailable ? '是' : '否') . "\n";
+        
+        if (empty($uri)) {
+            // 没有URI的打印机，直接保留（可能是本地打印机）
+            if ($isAvailable) {
+                $result['printers'][] = [
+                    'name' => $name,
+                    'display_name' => $name,
+                    'uri' => $uri,
+                    'is_default' => $printer['is_default'] ?? false,
+                    'status' => 'ready',
+                    'available' => true
+                ];
+            }
+            continue;
+        }
+        
+        // 按URI分组
+        if (!isset($printersByUri[$uri])) {
+            $printersByUri[$uri] = [];
+        }
+        $printersByUri[$uri][] = [
+            'name' => $name,
+            'display_name' => $name,
+            'uri' => $uri,
+            'is_default' => $printer['is_default'] ?? false,
+            'available' => $isAvailable
+        ];
+    }
+    
+    // 对于同URI的打印机，保留可用的，删除不可用的
+    foreach ($printersByUri as $uri => $printerGroup) {
+        $availablePrinters = array_filter($printerGroup, fn($p) => $p['available']);
+        $unavailablePrinters = array_filter($printerGroup, fn($p) => !$p['available']);
+        
+        if (count($availablePrinters) > 0) {
+            // 有可用的，保留第一个可用的
+            $keeper = array_values($availablePrinters)[0];
+            $keeper['status'] = 'ready';
+            $result['printers'][] = $keeper;
+            
+            // 删除其他不可用的（同URI）
+            foreach ($unavailablePrinters as $p) {
+                echo "[syncCupsPrinters] 删除不可用打印机: {$p['name']}\n";
+                exec('lpadmin -x ' . escapeshellarg($p['name']) . ' 2>/dev/null');
+                $result['removed'][] = $p['name'];
+            }
+            
+            // 如果有多个可用的同URI打印机，也只保留一个
+            $availableList = array_values($availablePrinters);
+            for ($i = 1; $i < count($availableList); $i++) {
+                echo "[syncCupsPrinters] 删除重复打印机: {$availableList[$i]['name']}\n";
+                exec('lpadmin -x ' . escapeshellarg($availableList[$i]['name']) . ' 2>/dev/null');
+                $result['removed'][] = $availableList[$i]['name'];
+            }
+        } else {
+            // 都不可用，保留第一个（用户可能需要手动修复）
+            $keeper = $printerGroup[0];
+            $keeper['status'] = 'error';
+            $result['printers'][] = $keeper;
+            
+            // 删除其他重复的
+            for ($i = 1; $i < count($printerGroup); $i++) {
+                echo "[syncCupsPrinters] 删除重复打印机: {$printerGroup[$i]['name']}\n";
+                exec('lpadmin -x ' . escapeshellarg($printerGroup[$i]['name']) . ' 2>/dev/null');
+                $result['removed'][] = $printerGroup[$i]['name'];
+            }
+        }
+    }
+    
+    $result['message'] = sprintf(
+        '同步完成: %d 台打印机, 删除 %d 台重复/不可用',
+        count($result['printers']),
+        count($result['removed'])
+    );
+    
+    echo "[syncCupsPrinters] {$result['message']}\n";
+    
+    return $result;
+}
+
 function getClientVersion(): array
 {
     $scriptPath = realpath(__FILE__);
@@ -481,7 +736,7 @@ function getClientVersion(): array
     $hash = md5_file($scriptPath);
     
     return [
-        'version' => '1.0.1',
+        'version' => '1.0.4',
         'file_hash' => $hash,
         'modified_time' => date('Y-m-d H:i:s', $modTime),
         'script_path' => $scriptPath
@@ -528,7 +783,7 @@ the printer is configured correctly!
     }
 }
 
-function executePrint(string $printerName, string $fileContent, string $filename, string $fileExt, int $copies = 1): array
+function executePrint(string $printerName, string $fileContent, string $filename, string $fileExt, int $copies = 1, ?int $pageFrom = null, ?int $pageTo = null): array
 {
     $tmpDir = '/tmp/print_jobs/';
     if (!is_dir($tmpDir)) {
@@ -550,9 +805,16 @@ function executePrint(string $printerName, string $fileContent, string $filename
     
     try {
         if ($ext === 'pdf') {
-            $cmd = sprintf('lp -d %s -n %d -o fit-to-page -o media=A4 %s 2>&1',
+            // 如果指定了起止页且合法，则使用 CUPS 的 -P 选页参数
+            $pageOption = '';
+            if ($pageFrom !== null && $pageTo !== null && $pageFrom >= 1 && $pageTo >= $pageFrom) {
+                $pageOption = sprintf(' -P %d-%d', $pageFrom, $pageTo);
+            }
+
+            $cmd = sprintf('lp -d %s -n %d%s -o fit-to-page -o media=A4 %s 2>&1',
                 escapeshellarg($printerName),
                 $copies,
+                $pageOption,
                 escapeshellarg($tmpFile)
             );
             exec($cmd, $output, $ret);
@@ -682,7 +944,7 @@ class PrinterClient
             'device_id' => $this->deviceId,
             'openid' => $openid,
             'name' => $systemInfo['hostname'] ?? '',
-            'version' => '1.0.1',
+            'version' => '1.0.4',
             'os_info' => $systemInfo['os'] ?? '',
             'ip_address' => $systemInfo['ip'] ?? ''
         ]);
@@ -863,7 +1125,6 @@ class PrinterClient
                 
             case 'bind':
                 $openid = $data['openid'] ?? '';
-                echo "[bind] 收到openid: " . var_export($openid, true) . "\n";
                 // 无论是否为空都调用 saveOpenid：空表示解绑，非空表示绑定
                 $this->saveOpenid($openid);
                 if ($openid !== '') {
@@ -964,6 +1225,9 @@ class PrinterClient
                 $fileExt = $data['file_ext'] ?? pathinfo($filename, PATHINFO_EXTENSION) ?: 'pdf';
                 $copies = $data['copies'] ?? 1;
                 $taskId = $data['task_id'] ?? $data['job_id'] ?? '';
+                // 可选页码参数（用于PDF选页打印）
+                $pageFrom = isset($data['page_from']) ? intval($data['page_from']) : null;
+                $pageTo   = isset($data['page_to']) ? intval($data['page_to']) : null;
                 
                 echo "[print] 打印机: $printer, 文件: $filename, 扩展名: $fileExt, 份数: $copies\n";
                 
@@ -987,7 +1251,7 @@ class PrinterClient
                     echo "[print] 错误: 文件内容为空\n";
                     $result = ['success' => false, 'message' => '文件内容为空'];
                 } else {
-                    $result = executePrint($printer, $fileContent, $filename, $fileExt, $copies);
+                    $result = executePrint($printer, $fileContent, $filename, $fileExt, $copies, $pageFrom, $pageTo);
                 }
                 
                 echo "[print] 结果: " . ($result['success'] ? '成功' : '失败') . " - " . $result['message'] . "\n";
@@ -1056,6 +1320,29 @@ class PrinterClient
                     'action' => 'version_info',
                     'request_id' => $requestId,
                     'data' => $versionInfo
+                ]);
+                break;
+                
+            case 'sync_cups_printers':
+                $requestId = $data['request_id'] ?? '';
+                echo "[sync_cups_printers] 收到同步CUPS打印机命令\n";
+                
+                // 执行同步
+                $syncResult = syncCupsPrinters();
+                
+                // 发送同步结果
+                $this->send([
+                    'action' => 'sync_cups_result',
+                    'request_id' => $requestId,
+                    'success' => $syncResult['success'],
+                    'message' => $syncResult['message'],
+                    'removed' => $syncResult['removed']
+                ]);
+                
+                // 同步后更新打印机列表到服务器
+                $this->send([
+                    'action' => 'printers_update',
+                    'printers' => $syncResult['printers']
                 ]);
                 break;
         }
