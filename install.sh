@@ -218,8 +218,9 @@ install_printer_drivers() {
     # 三星/施乐打印机 (使用splix)
     apt-get install -y printer-driver-splix 2>/dev/null || print_warn "Samsung/Xerox驱动安装跳过"
     
-    # Brother打印机
-    apt-get install -y printer-driver-brlaser 2>/dev/null || print_warn "Brother驱动安装跳过"
+    # 联想/Brother打印机 (联想部分型号兼容Brother驱动)
+    print_msg "安装联想/兄弟打印机驱动..."
+    apt-get install -y printer-driver-brlaser 2>/dev/null || print_warn "Lenovo/Brother驱动安装跳过"
     
     # Epson打印机
     apt-get install -y printer-driver-escpr 2>/dev/null || print_warn "Epson驱动安装跳过"
@@ -227,8 +228,22 @@ install_printer_drivers() {
     # Canon打印机
     apt-get install -y printer-driver-cnijfilter2 2>/dev/null || print_warn "Canon驱动安装跳过"
     
+    # Foomatic驱动引擎 (提供大量第三方驱动支持)
+    print_msg "安装Foomatic驱动引擎..."
+    apt-get install -y foomatic-db-engine 2>/dev/null || print_warn "Foomatic引擎安装跳过"
+    apt-get install -y foomatic-db 2>/dev/null || true
+    apt-get install -y foomatic-db-compressed-ppds 2>/dev/null || true
+    
+    # Gutenprint驱动 (支持大量打印机型号)
+    print_msg "安装Gutenprint驱动..."
+    apt-get install -y printer-driver-gutenprint 2>/dev/null || print_warn "Gutenprint驱动安装跳过"
+    
     # PostScript/PDF支持
     apt-get install -y printer-driver-cups-pdf 2>/dev/null || true
+    
+    # OpenPrinting驱动 (更多通用驱动)
+    apt-get install -y printer-driver-postscript-hp 2>/dev/null || true
+    apt-get install -y printer-driver-pnm2ppa 2>/dev/null || true
     
     print_msg "打印机驱动安装完成"
 }
