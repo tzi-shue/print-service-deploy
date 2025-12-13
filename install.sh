@@ -273,6 +273,44 @@ install_libreoffice() {
     chmod 777 /tmp/.libreoffice
 }
 
+# 安装打印增强工具（用于横向打印、PDF旋转等）
+install_print_tools() {
+    print_step "安装打印增强工具"
+    
+    print_msg "安装 qpdf (PDF处理工具)..."
+    apt-get install -y qpdf 2>/dev/null || print_warn "qpdf 安装跳过"
+    
+    print_msg "安装 ImageMagick (图片处理工具)..."
+    apt-get install -y imagemagick 2>/dev/null || print_warn "ImageMagick 安装跳过"
+    
+    # 可选：安装pdftk（某些系统可能没有）
+    print_msg "安装 pdftk (PDF工具包)..."
+    apt-get install -y pdftk-java 2>/dev/null || apt-get install -y pdftk 2>/dev/null || print_warn "pdftk 安装跳过（可选）"
+    
+    # 验证安装
+    echo ""
+    print_msg "打印增强工具安装状态:"
+    if command -v qpdf &> /dev/null; then
+        print_msg "  ✓ qpdf $(qpdf --version 2>&1 | head -1)"
+    else
+        print_warn "  ✗ qpdf 未安装"
+    fi
+    
+    if command -v convert &> /dev/null; then
+        print_msg "  ✓ ImageMagick $(convert --version 2>&1 | head -1 | cut -d' ' -f3)"
+    else
+        print_warn "  ✗ ImageMagick 未安装"
+    fi
+    
+    if command -v pdftk &> /dev/null; then
+        print_msg "  ✓ pdftk 已安装"
+    else
+        print_msg "  - pdftk 未安装（可选，qpdf可替代）"
+    fi
+    
+    print_msg "打印增强工具安装完成"
+}
+
 # 下载远程文件
 download_files() {
     print_step "下载客户端文件"
@@ -667,6 +705,7 @@ show_menu() {
             install_cups
             install_printer_drivers
             install_libreoffice
+            install_print_tools
             print_msg "依赖安装完成"
             ;;
         3)
@@ -718,6 +757,7 @@ full_install() {
     install_cups
     install_printer_drivers
     install_libreoffice
+    install_print_tools
     install_websocket_client
     configure_server
     configure_device_id
