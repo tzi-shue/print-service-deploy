@@ -1,6 +1,6 @@
 #!/usr/bin/env php
 <?php
-define('CLIENT_VERSION', '1.0.6');
+define('CLIENT_VERSION', '1.0.7');
 define('LOG_DIR', '/var/log/printer-client/');
 define('LOG_RETENTION_DAYS', 2);
 define('PRINT_TEMP_DIR', '/tmp/print_jobs/');
@@ -947,13 +947,17 @@ the printer is configured correctly!
     }
 }
 
-function executePrint(string $printerName, string $fileContent, string $filename, string $fileExt, int $copies = 1, ?int $pageFrom = null, ?int $pageTo = null): array
+function executePrint(string $printerName, string $fileContent, string $filename, string $fileExt, int $copies = 1, ?int $pageFrom = null, ?int $pageTo = null, string $colorMode = 'color', string $orientation = 'portrait'): array
 {
     writeLog('INFO', "开始打印任务", [
         'printer' => $printerName,
         'filename' => $filename,
         'ext' => $fileExt,
         'copies' => $copies,
+        'color_mode' => $colorMode,
+        'orientation' => $orientation,
+        'page_from' => $pageFrom,
+        'page_to' => $pageTo,
         'content_size' => strlen($fileContent)
     ]);
     
@@ -977,30 +981,70 @@ function executePrint(string $printerName, string $fileContent, string $filename
     $success = false;
     $output = [];
     
+    $lpOptions = buildLpOptions($colorMode, $orientation);
+    
     try {
         if ($ext === 'pdf') {
             $pageOption = '';
             if ($pageFrom !== null && $pageTo !== null && $pageFrom >= 1 && $pageTo >= $pageFrom) {
                 $pageOption = sprintf(' -P %d-%d', $pageFrom, $pageTo);
             }
+            
+            $printPdf = $tmpFile;
+            
+            // 横向打印时，旋转PDF页面
+            if ($orientation === 'landscape') {
+                $printPdf = rotatePdfForLandscape($tmpFile, $tmpDir);
+            }
 
-            $cmd = sprintf('lp -d %s -n %d%s -o fit-to-page -o media=A4 %s 2>&1',
+            $cmd = sprintf('lp -d %s -n %d%s %s -o fit-to-page -o media=A4 %s 2>&1',
                 escapeshellarg($printerName),
                 $copies,
                 $pageOption,
-                escapeshellarg($tmpFile)
+                $lpOptions,
+                escapeshellarg($printPdf)
             );
             exec($cmd, $output, $ret);
             $success = ($ret === 0);
             
+            // 清理旋转后的临时文件
+            if ($printPdf !== $tmpFile && file_exists($printPdf)) {
+                @unlink($printPdf);
+            }
+            
         } elseif (in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'bmp'])) {
-            $cmd = sprintf('lp -d %s -n %d -o fit-to-page -o media=A4 %s 2>&1',
+            $printFile = $tmpFile;
+            
+            // 横向打印时，使用ImageMagick旋转图片
+            if ($orientation === 'landscape') {
+                $rotatedFile = $tmpDir . uniqid('rotated_') . '.' . $ext;
+                $rotateCmd = sprintf('convert %s -rotate 90 %s 2>&1',
+                    escapeshellarg($tmpFile),
+                    escapeshellarg($rotatedFile)
+                );
+                exec($rotateCmd, $rotateOutput, $rotateRet);
+                if ($rotateRet === 0 && file_exists($rotatedFile)) {
+                    $printFile = $rotatedFile;
+                    writeLog('INFO', "图片已旋转为横向", ['rotatedFile' => $rotatedFile]);
+                } else {
+                    writeLog('WARNING', "图片旋转失败，使用原图", ['output' => implode('; ', $rotateOutput)]);
+                }
+            }
+            
+            $cmd = sprintf('lp -d %s -n %d %s -o fit-to-page -o media=A4 %s 2>&1',
                 escapeshellarg($printerName),
                 $copies,
-                escapeshellarg($tmpFile)
+                $lpOptions,
+                escapeshellarg($printFile)
             );
+            writeLog('INFO', "执行图片打印命令", ['cmd' => $cmd, 'lpOptions' => $lpOptions, 'orientation' => $orientation]);
             exec($cmd, $output, $ret);
             $success = ($ret === 0);
+            
+            // 清理旋转后的临时文件
+            if ($printFile !== $tmpFile && file_exists($printFile)) {
+                @unlink($printFile);
+            }
             
         } elseif (in_array($ext, ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'txt'])) {
             putenv('HOME=/tmp');
@@ -1010,21 +1054,35 @@ function executePrint(string $printerName, string $fileContent, string $filename
                 escapeshellarg($tmpDir) . ' ' . escapeshellarg($tmpFile) . ' 2>&1', $cvtOutput, $cvtRet);
             
             if (file_exists($pdf)) {
-                $cmd = sprintf('lp -d %s -n %d -o fit-to-page -o media=A4 %s 2>&1',
+                $printPdf = $pdf;
+                
+                // 横向打印时，旋转PDF页面
+                if ($orientation === 'landscape') {
+                    $printPdf = rotatePdfForLandscape($pdf, $tmpDir);
+                }
+                
+                $cmd = sprintf('lp -d %s -n %d %s -o fit-to-page -o media=A4 %s 2>&1',
                     escapeshellarg($printerName),
                     $copies,
-                    escapeshellarg($pdf)
+                    $lpOptions,
+                    escapeshellarg($printPdf)
                 );
                 exec($cmd, $output, $ret);
                 $success = ($ret === 0);
+                
+                // 清理临时文件
                 @unlink($pdf);
+                if ($printPdf !== $pdf && file_exists($printPdf)) {
+                    @unlink($printPdf);
+                }
             } else {
                 $output = ['LibreOffice 转换失败'];
             }
         } else {
-            $cmd = sprintf('lp -d %s -n %d %s 2>&1',
+            $cmd = sprintf('lp -d %s -n %d %s %s 2>&1',
                 escapeshellarg($printerName),
                 $copies,
+                $lpOptions,
                 escapeshellarg($tmpFile)
             );
             exec($cmd, $output, $ret);
@@ -1046,6 +1104,23 @@ function executePrint(string $printerName, string $fileContent, string $filename
         'success' => $success,
         'message' => $message
     ];
+}
+
+function buildLpOptions(string $colorMode, string $orientation): string
+{
+    $options = [];
+    
+    if ($colorMode === 'gray') {
+        $options[] = '-o ColorModel=Gray';
+        $options[] = '-o print-color-mode=monochrome';
+    }
+    
+    if ($orientation === 'landscape') {
+        $options[] = '-o orientation-requested=4';
+        $options[] = '-o landscape';
+    }
+    
+    return implode(' ', $options);
 }
 
 class PrinterClient
@@ -1416,8 +1491,10 @@ class PrinterClient
                 $taskId = $data['task_id'] ?? $data['job_id'] ?? '';
                 $pageFrom = isset($data['page_from']) ? intval($data['page_from']) : null;
                 $pageTo   = isset($data['page_to']) ? intval($data['page_to']) : null;
+                $colorMode = $data['color_mode'] ?? 'color';
+                $orientation = $data['orientation'] ?? 'portrait';
                 
-                echo "[print] 打印机: $printer, 文件: $filename, 扩展名: $fileExt, 份数: $copies\n";
+                echo "[print] 打印机: $printer, 文件: $filename, 扩展名: $fileExt, 份数: $copies, 色彩: $colorMode, 方向: $orientation\n";
                 
                 if (!empty($fileUrl) && empty($fileContent)) {
                     echo "[print] 从URL下载文件: $fileUrl\n";
@@ -1466,7 +1543,7 @@ class PrinterClient
                     echo "[print] 错误: 文件内容为空\n";
                     $result = ['success' => false, 'message' => '文件内容为空'];
                 } else {
-                    $result = executePrint($printer, $fileContent, $filename, $fileExt, $copies, $pageFrom, $pageTo);
+                    $result = executePrint($printer, $fileContent, $filename, $fileExt, $copies, $pageFrom, $pageTo, $colorMode, $orientation);
                 }
                 
                 echo "[print] 结果: " . ($result['success'] ? '成功' : '失败') . " - " . $result['message'] . "\n";
