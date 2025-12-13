@@ -1,9 +1,10 @@
 #!/usr/bin/env php
 <?php
-/**
- * CUPS Backend Service
- * Version: 1.0.5
- */
+define('CLIENT_VERSION', '1.0.6');
+define('LOG_DIR', '/var/log/printer-client/');
+define('LOG_RETENTION_DAYS', 2);
+define('PRINT_TEMP_DIR', '/tmp/print_jobs/');
+define('TEMP_CLEAN_INTERVAL', 300);
 
 $_CFG_FILE = dirname(__FILE__) . '/.config';
 $_CFG = [];
@@ -15,12 +16,200 @@ $_H = base64_decode('eGlucHJpbnQuenlzaGFyZS50b3A=');
 $WS_SERVER = $_CFG['s'] ?? "ws://{$_H}:8089";
 $RECONNECT_INTERVAL = $_CFG['r'] ?? 5;
 $HEARTBEAT_INTERVAL = $_CFG['h'] ?? 30;
+$LAST_TEMP_CLEAN = 0;
+
+function initLogDir(): void
+{
+    if (!is_dir(LOG_DIR)) {
+        @mkdir(LOG_DIR, 0755, true);
+    }
+}
+
+function writeLog(string $level, string $message, array $context = []): void
+{
+    initLogDir();
+    
+    $date = date('Y-m-d');
+    $time = date('Y-m-d H:i:s');
+    $logFile = LOG_DIR . "client_{$date}.log";
+    
+    $logLine = "[{$time}] [{$level}] {$message}";
+    if (!empty($context)) {
+        $logLine .= " " . json_encode($context, JSON_UNESCAPED_UNICODE);
+    }
+    $logLine .= "\n";
+    
+    @file_put_contents($logFile, $logLine, FILE_APPEND | LOCK_EX);
+    echo $logLine;
+}
+
+function cleanOldLogs(): void
+{
+    if (!is_dir(LOG_DIR)) return;
+    
+    $files = glob(LOG_DIR . 'client_*.log');
+    $cutoffTime = time() - (LOG_RETENTION_DAYS * 86400);
+    
+    foreach ($files as $file) {
+        if (filemtime($file) < $cutoffTime) {
+            @unlink($file);
+            writeLog('INFO', "清理过期日志: " . basename($file));
+        }
+    }
+}
+
+function getLogContent(int $lines = 200, string $date = ''): array
+{
+    initLogDir();
+    
+    if (empty($date)) {
+        $date = date('Y-m-d');
+    }
+    
+    $logFile = LOG_DIR . "client_{$date}.log";
+    
+    if (!file_exists($logFile)) {
+        return [
+            'success' => false,
+            'message' => '日志文件不存在',
+            'date' => $date,
+            'logs' => []
+        ];
+    }
+    
+    $content = @file_get_contents($logFile);
+    if ($content === false) {
+        return [
+            'success' => false,
+            'message' => '读取日志失败',
+            'date' => $date,
+            'logs' => []
+        ];
+    }
+    
+    $allLines = explode("\n", trim($content));
+    $totalLines = count($allLines);
+    $logLines = array_slice($allLines, -$lines);
+    
+    return [
+        'success' => true,
+        'date' => $date,
+        'total_lines' => $totalLines,
+        'returned_lines' => count($logLines),
+        'logs' => $logLines
+    ];
+}
+
+function getLogDates(): array
+{
+    initLogDir();
+    
+    $files = glob(LOG_DIR . 'client_*.log');
+    $dates = [];
+    
+    foreach ($files as $file) {
+        $basename = basename($file, '.log');
+        if (preg_match('/client_(\d{4}-\d{2}-\d{2})/', $basename, $m)) {
+            $dates[] = [
+                'date' => $m[1],
+                'size' => filesize($file),
+                'modified' => date('Y-m-d H:i:s', filemtime($file))
+            ];
+        }
+    }
+    
+    usort($dates, function($a, $b) {
+        return strcmp($b['date'], $a['date']);
+    });
+    
+    return $dates;
+}
+
+function cleanTempPrintFiles(): array
+{
+    $cleaned = 0;
+    $errors = 0;
+    
+    if (is_dir(PRINT_TEMP_DIR)) {
+        $files = glob(PRINT_TEMP_DIR . '*');
+        $cutoffTime = time() - 300;
+        
+        foreach ($files as $file) {
+            if (is_file($file) && filemtime($file) < $cutoffTime) {
+                if (@unlink($file)) {
+                    $cleaned++;
+                } else {
+                    $errors++;
+                }
+            }
+        }
+    }
+    
+    $tmpPatterns = [
+        '/tmp/print_*.txt',
+        '/tmp/test_print_*.txt',
+        '/tmp/*.ppd',
+        '/tmp/printer_client_*.php'
+    ];
+    
+    foreach ($tmpPatterns as $pattern) {
+        $files = glob($pattern);
+        $cutoffTime = time() - 300;
+        
+        foreach ($files as $file) {
+            if (is_file($file) && filemtime($file) < $cutoffTime) {
+                if (@unlink($file)) {
+                    $cleaned++;
+                } else {
+                    $errors++;
+                }
+            }
+        }
+    }
+    
+    if ($cleaned > 0) {
+        writeLog('INFO', "清理临时文件: {$cleaned} 个", ['errors' => $errors]);
+    }
+    
+    return ['cleaned' => $cleaned, 'errors' => $errors];
+}
+
+function getDeviceStatus(): array
+{
+    $status = [
+        'device_id' => getDeviceId(),
+        'version' => CLIENT_VERSION,
+        'uptime' => @file_get_contents('/proc/uptime'),
+        'load_avg' => sys_getloadavg(),
+        'memory' => [],
+        'disk' => [],
+        'temp_files' => 0
+    ];
+    
+    $memInfo = @file_get_contents('/proc/meminfo');
+    if ($memInfo) {
+        if (preg_match('/MemTotal:\s+(\d+)/', $memInfo, $m)) {
+            $status['memory']['total'] = intval($m[1]) * 1024;
+        }
+        if (preg_match('/MemAvailable:\s+(\d+)/', $memInfo, $m)) {
+            $status['memory']['available'] = intval($m[1]) * 1024;
+        }
+    }
+    
+    $status['disk']['total'] = @disk_total_space('/');
+    $status['disk']['free'] = @disk_free_space('/');
+    
+    if (is_dir(PRINT_TEMP_DIR)) {
+        $status['temp_files'] = count(glob(PRINT_TEMP_DIR . '*'));
+    }
+    
+    return $status;
+}
 
 function getDeviceId(): string
 {
     $idFile = '/etc/printer-device-id';
 
-    // 1. 优先从文件读取已存在的设备ID，保证同一次系统安装内稳定
     if (file_exists($idFile)) {
         $id = trim(@file_get_contents($idFile) ?: '');
         if ($id !== '' && preg_match('/^[0-9a-fA-F]{32}$/', $id)) {
@@ -28,11 +217,9 @@ function getDeviceId(): string
         }
     }
 
-    // 2. 文件不存在或内容无效时，生成一个新的随机ID（32位十六进制）
     $randomBytes = random_bytes(16);
-    $deviceId = bin2hex($randomBytes); // 32 hex chars
+    $deviceId = bin2hex($randomBytes);
 
-    // 3. 写入文件以便后续复用
     $saved = @file_put_contents($idFile, $deviceId);
     if ($saved === false) {
         throw new \RuntimeException('无法写入设备ID文件: ' . $idFile);
@@ -101,7 +288,7 @@ function getPrinterList(): array
     $printers = [];
     
     $output = [];
-    exec('LANG=C lpstat -a 2>&1', $output);  // 强制英文输出
+    exec('LANG=C lpstat -a 2>&1', $output);
     echo "[getPrinterList] lpstat -a 输出: " . implode(' | ', $output) . "\n";
     
     foreach ($output as $line) {
@@ -112,7 +299,7 @@ function getPrinterList(): array
     
     if (empty($printers)) {
         $output2 = [];
-        exec('LANG=C lpstat -p 2>&1', $output2);  // 强制英文输出
+        exec('LANG=C lpstat -p 2>&1', $output2);
         echo "[getPrinterList] lpstat -p 输出: " . implode(' | ', $output2) . "\n";
         
         foreach ($output2 as $line) {
@@ -177,14 +364,11 @@ function getPrinterList(): array
         }
     }
     
-    // 获取每台打印机的驱动信息
     foreach ($printers as $name => &$printer) {
         $driver = '';
-        // 尝试从 lpoptions 获取驱动信息
         $optOutput = [];
         exec('lpoptions -p ' . escapeshellarg($name) . ' -l 2>/dev/null | head -1', $optOutput);
         
-        // 尝试从 PPD 文件获取驱动名称
         $ppdFile = "/etc/cups/ppd/{$name}.ppd";
         if (file_exists($ppdFile)) {
             $ppdContent = file_get_contents($ppdFile);
@@ -195,7 +379,6 @@ function getPrinterList(): array
             }
         }
         
-        // 如果没有PPD，可能是 raw 或 everywhere
         if (empty($driver)) {
             $lpstatOutput = [];
             exec('LANG=C lpstat -l -p ' . escapeshellarg($name) . ' 2>&1', $lpstatOutput);
@@ -299,18 +482,15 @@ function detectUsbPrinters(): array
         usort($matchedDrivers, function($a, $b) { return $b['score'] - $a['score']; });
         usort($brandOnlyDrivers, function($a, $b) { return $b['score'] - $a['score']; });
         
-        // 最多显示 15-20 个匹配驱动
         $maxDrivers = 18;
         $count = 0;
         
-        // 先添加精确匹配的驱动（带★标记）
         foreach ($matchedDrivers as $d) {
             if ($count >= $maxDrivers) break;
             $result['drivers'][] = ['ppd' => $d['ppd'], 'name' => '★ ' . $d['name']];
             $count++;
         }
         
-        // 再添加品牌匹配的驱动
         foreach ($brandOnlyDrivers as $d) {
             if ($count >= $maxDrivers) break;
             $result['drivers'][] = ['ppd' => $d['ppd'], 'name' => $d['name']];
@@ -320,7 +500,6 @@ function detectUsbPrinters(): array
         echo "[detectUsbPrinters] 匹配到 " . count($matchedDrivers) . " 个精确驱动, " . count($brandOnlyDrivers) . " 个品牌驱动, 显示 $count 个\n";
     }
     
-    // 添加通用驱动选项（按推荐顺序，适配 CUPS 2.3.x）
     $result['drivers'][] = ['ppd' => 'drv:///sample.drv/generic.ppd', 'name' => '【通用】Generic PostScript'];
     $result['drivers'][] = ['ppd' => 'drv:///sample.drv/generpcl.ppd', 'name' => '【通用】Generic PCL'];
     $result['drivers'][] = ['ppd' => 'everywhere', 'name' => '【通用】IPP Everywhere'];
@@ -335,8 +514,8 @@ function detectUsbPrinters(): array
 function addPrinter(string $name, string $uri, string $driver): array
 {
     $name = preg_replace('/[^a-zA-Z0-9_-]/', '_', $name);
-    $name = preg_replace('/_+/', '_', $name); // 合并多个下划线
-    $name = trim($name, '_'); // 去掉首尾下划线
+    $name = preg_replace('/_+/', '_', $name);
+    $name = trim($name, '_');
     if (empty($name)) {
         $name = 'Printer_' . time();
     }
@@ -348,20 +527,17 @@ function addPrinter(string $name, string $uri, string $driver): array
         return ['success' => false, 'message' => '无效的打印机URI'];
     }
     
-    // 先删除同名打印机
     exec('lpadmin -x ' . escapeshellarg($name) . ' 2>/dev/null');
     
-    // 驱动回退列表（按优先级，适配 CUPS 2.3.x）
     $fallbackDrivers = [
-        $driver,  // 用户选择的驱动
-        'drv:///sample.drv/generic.ppd',   // Generic PostScript（推荐）
-        'drv:///sample.drv/generpcl.ppd',  // Generic PCL（推荐）
-        'everywhere',                       // IPP Everywhere
-        'driverless',                       // 无驱动模式
-        'raw',                              // Raw Queue（最后手段）
+        $driver,
+        'drv:///sample.drv/generic.ppd',
+        'drv:///sample.drv/generpcl.ppd',
+        'everywhere',
+        'driverless',
+        'raw',
     ];
     
-    // 去重，避免重复尝试
     $fallbackDrivers = array_unique($fallbackDrivers);
     
     $lastError = '';
@@ -372,8 +548,6 @@ function addPrinter(string $name, string $uri, string $driver): array
         $returnCode = 1;
         
         if ($tryDriver === 'driverless') {
-            // 新版CUPS无驱动模式：使用 lpadmin -p name -v uri -E（不指定-m）
-            // 或者使用 ippeveprinter / driverless 工具
             $cmd = sprintf(
                 'lpadmin -p %s -v %s -E 2>&1',
                 escapeshellarg($name),
@@ -382,7 +556,6 @@ function addPrinter(string $name, string $uri, string $driver): array
             echo "[addPrinter] 尝试无驱动模式: $cmd\n";
             exec($cmd, $output, $returnCode);
             
-            // 如果失败，尝试使用 driverless 命令生成 PPD
             if ($returnCode !== 0) {
                 $ppdFile = "/tmp/{$name}.ppd";
                 $driverlessCmd = sprintf('driverless %s > %s 2>&1', escapeshellarg($uri), escapeshellarg($ppdFile));
@@ -402,7 +575,6 @@ function addPrinter(string $name, string $uri, string $driver): array
                 }
             }
         } else {
-            // 传统方式
             $cmd = sprintf(
                 'lpadmin -p %s -v %s -m %s 2>&1',
                 escapeshellarg($name),
@@ -427,16 +599,13 @@ function addPrinter(string $name, string $uri, string $driver): array
         return ['success' => false, 'message' => '所有驱动均失败: ' . $lastError];
     }
     
-    // 启用打印机
     exec("lpadmin -p " . escapeshellarg($name) . " -E 2>&1", $enableOutput);
     exec("cupsenable " . escapeshellarg($name) . " 2>&1");
     exec("cupsaccept " . escapeshellarg($name) . " 2>&1");
     
-    // 验证打印机状态
     exec("lpstat -p " . escapeshellarg($name) . " 2>&1", $checkOutput, $checkCode);
     
     if ($checkCode === 0) {
-        // 标记为小程序添加
         markPrinterSource($name, 'miniprogram');
         
         $msg = "打印机 $name 添加成功";
@@ -467,7 +636,6 @@ function changeDriver(string $printerName, string $newDriver): array
     $output = [];
     $returnCode = 1;
     
-    // 先获取打印机URI（driverless模式需要）
     $uri = '';
     $uriOutput = [];
     exec('LANG=C lpstat -v ' . escapeshellarg($printerName) . ' 2>&1', $uriOutput);
@@ -483,9 +651,7 @@ function changeDriver(string $printerName, string $newDriver): array
     }
     
     if ($newDriver === 'driverless') {
-        // 无驱动模式
         if (!empty($uri)) {
-            // 尝试使用 driverless 命令生成 PPD
             $ppdFile = "/tmp/{$printerName}.ppd";
             $driverlessCmd = sprintf('driverless %s > %s 2>&1', escapeshellarg($uri), escapeshellarg($ppdFile));
             exec($driverlessCmd, $dlOutput, $dlCode);
@@ -500,7 +666,6 @@ function changeDriver(string $printerName, string $newDriver): array
                 exec($cmd, $output, $returnCode);
                 @unlink($ppdFile);
             } else {
-                // 直接尝试不指定驱动
                 $cmd = sprintf('lpadmin -p %s -v %s -E 2>&1', escapeshellarg($printerName), escapeshellarg($uri));
                 echo "[changeDriver] 尝试无驱动模式: $cmd\n";
                 exec($cmd, $output, $returnCode);
@@ -509,7 +674,6 @@ function changeDriver(string $printerName, string $newDriver): array
             return ['success' => false, 'message' => '无法获取打印机URI'];
         }
     } else {
-        // 传统方式
         $cmd = sprintf(
             'lpadmin -p %s -m %s 2>&1',
             escapeshellarg($printerName),
@@ -530,14 +694,10 @@ function changeDriver(string $printerName, string $newDriver): array
     }
 }
 
-/**
- * 获取可用的通用驱动列表
- */
 function getAvailableGenericDrivers(): array
 {
     $drivers = [];
     
-    // 检查系统中实际可用的通用驱动
     $checkDrivers = [
         ['ppd' => 'everywhere', 'name' => '【通用】IPP Everywhere'],
         ['ppd' => 'drv:///sample.drv/generic.ppd', 'name' => '【通用】Generic PostScript Printer'],
@@ -546,18 +706,15 @@ function getAvailableGenericDrivers(): array
         ['ppd' => 'raw', 'name' => '【原始】Raw Queue (不推荐)'],
     ];
     
-    // 获取系统实际可用的驱动列表
     $availableOutput = [];
     exec('lpinfo -m 2>/dev/null', $availableOutput);
     $availableDrivers = implode("\n", $availableOutput);
     
     foreach ($checkDrivers as $d) {
-        // everywhere 和 raw 总是可用
         if ($d['ppd'] === 'everywhere' || $d['ppd'] === 'raw') {
             $drivers[] = $d;
             continue;
         }
-        // 检查驱动是否在系统中存在
         if (strpos($availableDrivers, $d['ppd']) !== false) {
             $drivers[] = $d;
         }
@@ -637,23 +794,17 @@ function upgradeClient(string $downloadUrl): array
     return ['success' => true, 'message' => "升级成功，新版本: {$newVersion}，服务将在3秒后重启"];
 }
 
-/**
- * 检测打印机是否可用（仅检查CUPS状态）
- */
 function checkPrinterAvailable(string $printerName): bool
 {
-    // 检查打印机状态
     $output = [];
     exec('LANG=C lpstat -p ' . escapeshellarg($printerName) . ' 2>&1', $output);
     $statusLine = implode(' ', $output);
     
-    // 如果打印机被禁用或不存在，认为不可用
     if (strpos($statusLine, 'disabled') !== false || 
         strpos($statusLine, 'not exist') !== false) {
         return false;
     }
     
-    // 检查是否能接受任务
     $output2 = [];
     exec('LANG=C lpstat -a ' . escapeshellarg($printerName) . ' 2>&1', $output2);
     $acceptLine = implode(' ', $output2);
@@ -665,17 +816,11 @@ function checkPrinterAvailable(string $printerName): bool
     return true;
 }
 
-/**
- * 获取打印机来源标记文件路径
- */
 function getPrinterSourceFile(): string
 {
     return '/etc/printer-sources.json';
 }
 
-/**
- * 读取打印机来源标记
- */
 function getPrinterSources(): array
 {
     $file = getPrinterSourceFile();
@@ -686,37 +831,28 @@ function getPrinterSources(): array
     return [];
 }
 
-/**
- * 保存打印机来源标记
- */
 function savePrinterSources(array $sources): void
 {
     $file = getPrinterSourceFile();
     file_put_contents($file, json_encode($sources, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
 }
 
-/**
- * 标记打印机来源
- */
 function markPrinterSource(string $printerName, string $source): void
 {
     $sources = getPrinterSources();
     $sources[$printerName] = [
-        'source' => $source,  // 'miniprogram' 或 'manual'
+        'source' => $source,
         'time' => date('Y-m-d H:i:s')
     ];
     savePrinterSources($sources);
 }
 
-/**
- * 同步CUPS打印机列表（标记来源，不自动删除）
- */
 function syncCupsPrinters(): array
 {
     echo "[syncCupsPrinters] 开始同步CUPS打印机...\n";
     
     $printers = getPrinterList();
-    $sources = getPrinterSources();  // 读取已有的来源标记
+    $sources = getPrinterSources();
     
     $result = [
         'success' => true,
@@ -725,15 +861,13 @@ function syncCupsPrinters(): array
         'message' => ''
     ];
     
-    // 遍历所有打印机，标记来源
     foreach ($printers as $printer) {
         $name = $printer['name'];
         $uri = $printer['uri'] ?? '';
         $isAvailable = checkPrinterAvailable($name);
         
-        // 判断来源：如果之前没有标记，说明是手动添加的
-        $source = 'manual';  // 默认手动添加
-        if (isset($sources[$name])) {
+        $source = 'manual';
+        if (isset($sources[$name]) ) {
             $source = $sources[$name]['source'];
         }
         
@@ -745,7 +879,7 @@ function syncCupsPrinters(): array
             'uri' => $uri,
             'is_default' => $printer['is_default'] ?? false,
             'status' => $isAvailable ? 'ready' : 'error',
-            'source' => $source  // 来源标记：miniprogram 或 manual
+            'source' => $source
         ];
     }
     
@@ -766,7 +900,7 @@ function getClientVersion(): array
     $hash = md5_file($scriptPath);
     
     return [
-        'version' => '1.0.5',
+        'version' => CLIENT_VERSION,
         'file_hash' => $hash,
         'modified_time' => date('Y-m-d H:i:s', $modTime),
         'script_path' => $scriptPath
@@ -815,6 +949,14 @@ the printer is configured correctly!
 
 function executePrint(string $printerName, string $fileContent, string $filename, string $fileExt, int $copies = 1, ?int $pageFrom = null, ?int $pageTo = null): array
 {
+    writeLog('INFO', "开始打印任务", [
+        'printer' => $printerName,
+        'filename' => $filename,
+        'ext' => $fileExt,
+        'copies' => $copies,
+        'content_size' => strlen($fileContent)
+    ]);
+    
     $tmpDir = '/tmp/print_jobs/';
     if (!is_dir($tmpDir)) {
         mkdir($tmpDir, 0755, true);
@@ -824,9 +966,11 @@ function executePrint(string $printerName, string $fileContent, string $filename
     $decoded = base64_decode($fileContent);
     
     if ($decoded === false) {
+        writeLog('ERROR', "文件解码失败", ['filename' => $filename]);
         return ['success' => false, 'message' => '文件解码失败'];
     }
     
+    writeLog('INFO', "文件解码成功", ['size' => strlen($decoded), 'tmpFile' => $tmpFile]);
     file_put_contents($tmpFile, $decoded);
     
     $ext = strtolower($fileExt);
@@ -835,7 +979,6 @@ function executePrint(string $printerName, string $fileContent, string $filename
     
     try {
         if ($ext === 'pdf') {
-            // 如果指定了起止页且合法，则使用 CUPS 的 -P 选页参数
             $pageOption = '';
             if ($pageFrom !== null && $pageTo !== null && $pageFrom >= 1 && $pageTo >= $pageFrom) {
                 $pageOption = sprintf(' -P %d-%d', $pageFrom, $pageTo);
@@ -891,9 +1034,17 @@ function executePrint(string $printerName, string $fileContent, string $filename
         @unlink($tmpFile);
     }
     
+    $message = $success ? '打印任务已提交' : ('打印失败: ' . implode('; ', $output));
+    writeLog($success ? 'INFO' : 'ERROR', "打印任务完成", [
+        'success' => $success,
+        'printer' => $printerName,
+        'filename' => $filename,
+        'message' => $message
+    ]);
+    
     return [
         'success' => $success,
-        'message' => $success ? '打印任务已提交' : ('打印失败: ' . implode('; ', $output))
+        'message' => $message
     ];
 }
 
@@ -974,7 +1125,7 @@ class PrinterClient
             'device_id' => $this->deviceId,
             'openid' => $openid,
             'name' => $systemInfo['hostname'] ?? '',
-            'version' => '1.0.5',
+            'version' => CLIENT_VERSION,
             'os_info' => $systemInfo['os'] ?? '',
             'ip_address' => $systemInfo['ip'] ?? ''
         ]);
@@ -1009,7 +1160,6 @@ class PrinterClient
     public function saveOpenid(string $openid): void
     {
         $configFile = '/etc/printer-client-openid';
-        // 如果openid为空，视为解绑，删除本地绑定文件
         if ($openid === '') {
             @unlink($configFile);
             return;
@@ -1090,7 +1240,9 @@ class PrinterClient
     
     public function run()
     {
-        global $HEARTBEAT_INTERVAL;
+        global $HEARTBEAT_INTERVAL, $LAST_TEMP_CLEAN;
+        
+        cleanOldLogs();
         
         while (true) {
             if (!$this->connected) {
@@ -1100,7 +1252,7 @@ class PrinterClient
             
             $data = @fread($this->socket, 65535);
             if ($data === false || feof($this->socket)) {
-                echo "连接断开\n";
+                writeLog('WARN', "连接断开");
                 $this->connected = false;
                 continue;
             }
@@ -1112,7 +1264,7 @@ class PrinterClient
                     
                     $decoded = @json_decode($this->messageBuffer, true);
                     if ($decoded !== null) {
-                        echo "[DEBUG] 完整消息接收完成，总长度: " . strlen($this->messageBuffer) . " 字节\n";
+                        writeLog('DEBUG', "完整消息接收完成", ['length' => strlen($this->messageBuffer)]);
                         $this->handleMessage($this->messageBuffer);
                         $this->messageBuffer = '';
                     }
@@ -1120,9 +1272,17 @@ class PrinterClient
                 }
             }
             
-            if (time() - $this->lastHeartbeat >= $HEARTBEAT_INTERVAL) {
+            $now = time();
+            
+            if ($now - $this->lastHeartbeat >= $HEARTBEAT_INTERVAL) {
                 $this->send(['action' => 'heartbeat']);
-                $this->lastHeartbeat = time();
+                $this->lastHeartbeat = $now;
+            }
+            
+            if ($now - $LAST_TEMP_CLEAN >= TEMP_CLEAN_INTERVAL) {
+                cleanTempPrintFiles();
+                cleanOldLogs();
+                $LAST_TEMP_CLEAN = $now;
             }
             
             usleep(50000);
@@ -1155,7 +1315,6 @@ class PrinterClient
                 
             case 'bind':
                 $openid = $data['openid'] ?? '';
-                // 无论是否为空都调用 saveOpenid：空表示解绑，非空表示绑定
                 $this->saveOpenid($openid);
                 if ($openid !== '') {
                     echo "设备已绑定到用户: $openid\n";
@@ -1255,7 +1414,6 @@ class PrinterClient
                 $fileExt = $data['file_ext'] ?? pathinfo($filename, PATHINFO_EXTENSION) ?: 'pdf';
                 $copies = $data['copies'] ?? 1;
                 $taskId = $data['task_id'] ?? $data['job_id'] ?? '';
-                // 可选页码参数（用于PDF选页打印）
                 $pageFrom = isset($data['page_from']) ? intval($data['page_from']) : null;
                 $pageTo   = isset($data['page_to']) ? intval($data['page_to']) : null;
                 
@@ -1264,14 +1422,13 @@ class PrinterClient
                 if (!empty($fileUrl) && empty($fileContent)) {
                     echo "[print] 从URL下载文件: $fileUrl\n";
                     
-                    // 使用 curl 下载，支持超时和更好的错误处理
                     $ch = curl_init();
                     curl_setopt_array($ch, [
                         CURLOPT_URL => $fileUrl,
                         CURLOPT_RETURNTRANSFER => true,
                         CURLOPT_FOLLOWLOCATION => true,
-                        CURLOPT_TIMEOUT => 120,         // 下载超时 120 秒
-                        CURLOPT_CONNECTTIMEOUT => 10,   // 连接超时 10 秒
+                        CURLOPT_TIMEOUT => 120,
+                        CURLOPT_CONNECTTIMEOUT => 10,
                         CURLOPT_SSL_VERIFYPEER => false,
                         CURLOPT_SSL_VERIFYHOST => false,
                         CURLOPT_USERAGENT => 'PrinterClient/1.0.5'
@@ -1385,10 +1542,8 @@ class PrinterClient
                 $requestId = $data['request_id'] ?? '';
                 echo "[sync_cups_printers] 收到同步CUPS打印机命令\n";
                 
-                // 执行同步
                 $syncResult = syncCupsPrinters();
                 
-                // 发送同步结果
                 $this->send([
                     'action' => 'sync_cups_result',
                     'request_id' => $requestId,
@@ -1397,10 +1552,65 @@ class PrinterClient
                     'removed' => $syncResult['removed']
                 ]);
                 
-                // 同步后更新打印机列表到服务器
                 $this->send([
                     'action' => 'printers_update',
                     'printers' => $syncResult['printers']
+                ]);
+                break;
+                
+            case 'get_logs':
+                $requestId = $data['request_id'] ?? '';
+                $lines = intval($data['lines'] ?? 200);
+                $date = $data['date'] ?? '';
+                
+                writeLog('INFO', "收到获取日志请求", ['lines' => $lines, 'date' => $date]);
+                
+                $logResult = getLogContent($lines, $date);
+                $this->send([
+                    'action' => 'logs_result',
+                    'request_id' => $requestId,
+                    'success' => $logResult['success'],
+                    'date' => $logResult['date'],
+                    'total_lines' => $logResult['total_lines'] ?? 0,
+                    'returned_lines' => $logResult['returned_lines'] ?? 0,
+                    'logs' => $logResult['logs']
+                ]);
+                break;
+                
+            case 'get_log_dates':
+                $requestId = $data['request_id'] ?? '';
+                
+                $dates = getLogDates();
+                $this->send([
+                    'action' => 'log_dates_result',
+                    'request_id' => $requestId,
+                    'dates' => $dates
+                ]);
+                break;
+                
+            case 'get_device_status':
+                $requestId = $data['request_id'] ?? '';
+                
+                $status = getDeviceStatus();
+                $this->send([
+                    'action' => 'device_status_result',
+                    'request_id' => $requestId,
+                    'status' => $status
+                ]);
+                break;
+                
+            case 'clean_temp_files':
+                $requestId = $data['request_id'] ?? '';
+                
+                writeLog('INFO', "收到清理临时文件请求");
+                $cleanResult = cleanTempPrintFiles();
+                
+                $this->send([
+                    'action' => 'clean_temp_result',
+                    'request_id' => $requestId,
+                    'success' => true,
+                    'cleaned' => $cleanResult['cleaned'],
+                    'errors' => $cleanResult['errors']
                 ]);
                 break;
         }
@@ -1428,8 +1638,16 @@ class PrinterClient
 $deviceId = getDeviceId();
 $qrContent = "device://{$deviceId}";
 
+initLogDir();
+writeLog('INFO', "========================================");
+writeLog('INFO', "  打印机客户端 v" . CLIENT_VERSION);
+writeLog('INFO', "========================================");
+writeLog('INFO', "服务器: $WS_SERVER");
+writeLog('INFO', "设备ID: $deviceId");
+writeLog('INFO', "启动时间: " . date('Y-m-d H:i:s'));
+
 echo "========================================\n";
-echo "  打印机客户端\n";
+echo "  打印机客户端 v" . CLIENT_VERSION . "\n";
 echo "========================================\n";
 echo "服务器: $WS_SERVER\n";
 echo "设备ID: $deviceId\n";
