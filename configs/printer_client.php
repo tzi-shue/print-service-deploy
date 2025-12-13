@@ -994,7 +994,19 @@ function executePrint(string $printerName, string $fileContent, string $filename
             
             // 横向打印时，旋转PDF页面
             if ($orientation === 'landscape') {
-                $printPdf = rotatePdfForLandscape($tmpFile, $tmpDir);
+                $rotated = rotatePdfForLandscape($tmpFile, $tmpDir);
+                if (!empty($rotated)) {
+                    $printPdf = $rotated;
+                } else {
+                    // 没有旋转工具，返回错误
+                    $output = ['横向打印需要安装qpdf或pdftk，请联系管理员'];
+                    $success = false;
+                    writeLog('ERROR', "横向打印失败：未安装旋转工具");
+                    return [
+                        'success' => false,
+                        'message' => '横向打印需要安装qpdf或pdftk，请在打印机端执行: apt install qpdf'
+                    ];
+                }
             }
 
             $cmd = sprintf('lp -d %s -n %d%s %s -o fit-to-page -o media=A4 %s 2>&1',
@@ -1017,17 +1029,30 @@ function executePrint(string $printerName, string $fileContent, string $filename
             
             // 横向打印时，使用ImageMagick旋转图片
             if ($orientation === 'landscape') {
-                $rotatedFile = $tmpDir . uniqid('rotated_') . '.' . $ext;
-                $rotateCmd = sprintf('convert %s -rotate 90 %s 2>&1',
-                    escapeshellarg($tmpFile),
-                    escapeshellarg($rotatedFile)
-                );
-                exec($rotateCmd, $rotateOutput, $rotateRet);
-                if ($rotateRet === 0 && file_exists($rotatedFile)) {
-                    $printFile = $rotatedFile;
-                    writeLog('INFO', "图片已旋转为横向", ['rotatedFile' => $rotatedFile]);
+                exec('which convert 2>/dev/null', $whichOutput, $whichRet);
+                if ($whichRet === 0) {
+                    $rotatedFile = $tmpDir . uniqid('rotated_') . '.' . $ext;
+                    $rotateCmd = sprintf('convert %s -rotate 90 %s 2>&1',
+                        escapeshellarg($tmpFile),
+                        escapeshellarg($rotatedFile)
+                    );
+                    exec($rotateCmd, $rotateOutput, $rotateRet);
+                    if ($rotateRet === 0 && file_exists($rotatedFile)) {
+                        $printFile = $rotatedFile;
+                        writeLog('INFO', "图片已旋转为横向", ['rotatedFile' => $rotatedFile]);
+                    } else {
+                        writeLog('ERROR', "图片旋转失败", ['output' => implode('; ', $rotateOutput)]);
+                        return [
+                            'success' => false,
+                            'message' => '横向打印失败：图片旋转出错'
+                        ];
+                    }
                 } else {
-                    writeLog('WARNING', "图片旋转失败，使用原图", ['output' => implode('; ', $rotateOutput)]);
+                    writeLog('ERROR', "横向打印失败：未安装ImageMagick");
+                    return [
+                        'success' => false,
+                        'message' => '横向打印需要安装ImageMagick，请在打印机端执行: apt install imagemagick'
+                    ];
                 }
             }
             
@@ -1037,7 +1062,7 @@ function executePrint(string $printerName, string $fileContent, string $filename
                 $lpOptions,
                 escapeshellarg($printFile)
             );
-            writeLog('INFO', "执行图片打印命令", ['cmd' => $cmd, 'lpOptions' => $lpOptions, 'orientation' => $orientation]);
+            writeLog('INFO', "执行图片打印命令", ['cmd' => $cmd, 'orientation' => $orientation]);
             exec($cmd, $output, $ret);
             $success = ($ret === 0);
             
@@ -1047,26 +1072,53 @@ function executePrint(string $printerName, string $fileContent, string $filename
             }
             
         } elseif (in_array($ext, ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'txt'])) {
+            writeLog('INFO', "准备转换文档为PDF", ['file' => $tmpFile]);
             putenv('HOME=/tmp');
             $pdf = $tmpDir . pathinfo($tmpFile, PATHINFO_FILENAME) . '.pdf';
             
-            exec('timeout 60 libreoffice --headless --convert-to pdf --outdir ' . 
-                escapeshellarg($tmpDir) . ' ' . escapeshellarg($tmpFile) . ' 2>&1', $cvtOutput, $cvtRet);
+            $convertCmd = 'timeout 60 libreoffice --headless --convert-to pdf --outdir ' . 
+                escapeshellarg($tmpDir) . ' ' . escapeshellarg($tmpFile) . ' 2>&1';
+            
+            writeLog('INFO', "执行LibreOffice转换", ['cmd' => $convertCmd]);
+            exec($convertCmd, $cvtOutput, $cvtRet);
+            writeLog('INFO', "LibreOffice转换结果", ['ret' => $cvtRet, 'output' => implode('; ', $cvtOutput), 'pdf' => $pdf, 'exists' => file_exists($pdf)]);
             
             if (file_exists($pdf)) {
                 $printPdf = $pdf;
                 
                 // 横向打印时，旋转PDF页面
                 if ($orientation === 'landscape') {
-                    $printPdf = rotatePdfForLandscape($pdf, $tmpDir);
+                    $rotated = rotatePdfForLandscape($pdf, $tmpDir);
+                    if (!empty($rotated)) {
+                        $printPdf = $rotated;
+                    } else {
+                        @unlink($pdf);
+                        writeLog('ERROR', "文档横向打印失败：未安装旋转工具");
+                        return [
+                            'success' => false,
+                            'message' => '横向打印需要安装qpdf或pdftk，请在打印机端执行: apt install qpdf'
+                        ];
+                    }
                 }
                 
-                $cmd = sprintf('lp -d %s -n %d %s -o fit-to-page -o media=A4 %s 2>&1',
+                // 页码范围选项（文档转PDF后也支持选页打印）
+                $pageOption = '';
+                $pFrom = intval($pageFrom);
+                $pTo = intval($pageTo);
+                writeLog('INFO', "检查页码参数", ['page_from' => $pageFrom, 'page_to' => $pageTo, 'pFrom' => $pFrom, 'pTo' => $pTo]);
+                if ($pFrom >= 1 && $pTo >= $pFrom) {
+                    $pageOption = sprintf(' -P %d-%d', $pFrom, $pTo);
+                    writeLog('INFO', "文档选页打印", ['pageOption' => $pageOption]);
+                }
+                
+                $cmd = sprintf('lp -d %s -n %d%s %s -o fit-to-page -o media=A4 %s 2>&1',
                     escapeshellarg($printerName),
                     $copies,
+                    $pageOption,
                     $lpOptions,
                     escapeshellarg($printPdf)
                 );
+                writeLog('INFO', "执行文档打印命令", ['cmd' => $cmd, 'orientation' => $orientation]);
                 exec($cmd, $output, $ret);
                 $success = ($ret === 0);
                 
@@ -1106,21 +1158,70 @@ function executePrint(string $printerName, string $fileContent, string $filename
     ];
 }
 
-function buildLpOptions(string $colorMode, string $orientation): string
+function buildLpOptions($colorMode, $orientation): string
 {
     $options = [];
+    
+    // 确保参数是字符串
+    $colorMode = strval($colorMode ?: 'color');
     
     if ($colorMode === 'gray') {
         $options[] = '-o ColorModel=Gray';
         $options[] = '-o print-color-mode=monochrome';
     }
     
-    if ($orientation === 'landscape') {
-        $options[] = '-o orientation-requested=4';
-        $options[] = '-o landscape';
-    }
+    // 注意：不使用CUPS的-o landscape选项，因为很多打印机不支持或会产生镜像
+    // 横向打印通过旋转PDF/图片内容本身来实现
     
     return implode(' ', $options);
+}
+
+/**
+ * 旋转PDF为横向打印
+ * 尝试使用 pdftk 或 qpdf 旋转PDF页面
+ * 如果没有安装这些工具，返回空字符串表示失败
+ */
+function rotatePdfForLandscape($pdfFile, $tmpDir): string
+{
+    $pdfFile = strval($pdfFile);
+    $tmpDir = strval($tmpDir);
+    $rotatedPdf = $tmpDir . uniqid('rotated_') . '.pdf';
+    
+    // 方法1: 使用 qpdf 旋转（推荐，更稳定）
+    exec('which qpdf 2>/dev/null', $whichQpdf, $whichQpdfRet);
+    if ($whichQpdfRet === 0) {
+        $qpdfCmd = sprintf('qpdf --rotate=+90 %s %s 2>&1',
+            escapeshellarg($pdfFile),
+            escapeshellarg($rotatedPdf)
+        );
+        exec($qpdfCmd, $qpdfOutput, $qpdfRet);
+        
+        if ($qpdfRet === 0 && file_exists($rotatedPdf)) {
+            writeLog('INFO', "PDF已使用qpdf旋转为横向", ['rotatedPdf' => $rotatedPdf]);
+            return $rotatedPdf;
+        }
+        writeLog('WARNING', "qpdf旋转失败", ['output' => implode('; ', $qpdfOutput)]);
+    }
+    
+    // 方法2: 使用 pdftk 旋转
+    exec('which pdftk 2>/dev/null', $whichPdftk, $whichPdftkRet);
+    if ($whichPdftkRet === 0) {
+        $pdftkCmd = sprintf('pdftk %s cat 1-endright output %s 2>&1',
+            escapeshellarg($pdfFile),
+            escapeshellarg($rotatedPdf)
+        );
+        exec($pdftkCmd, $pdftkOutput, $pdftkRet);
+        
+        if ($pdftkRet === 0 && file_exists($rotatedPdf)) {
+            writeLog('INFO', "PDF已使用pdftk旋转为横向", ['rotatedPdf' => $rotatedPdf]);
+            return $rotatedPdf;
+        }
+        writeLog('WARNING', "pdftk旋转失败", ['output' => implode('; ', $pdftkOutput)]);
+    }
+    
+    // 没有安装任何工具或全部失败
+    writeLog('WARNING', "未安装PDF旋转工具(qpdf/pdftk)，无法横向打印");
+    return '';
 }
 
 class PrinterClient
@@ -1487,12 +1588,12 @@ class PrinterClient
                 $fileUrl = $data['file_url'] ?? '';
                 $filename = $data['filename'] ?? $data['file_name'] ?? 'document';
                 $fileExt = $data['file_ext'] ?? pathinfo($filename, PATHINFO_EXTENSION) ?: 'pdf';
-                $copies = $data['copies'] ?? 1;
+                $copies = intval($data['copies'] ?? 1);
                 $taskId = $data['task_id'] ?? $data['job_id'] ?? '';
-                $pageFrom = isset($data['page_from']) ? intval($data['page_from']) : null;
-                $pageTo   = isset($data['page_to']) ? intval($data['page_to']) : null;
-                $colorMode = $data['color_mode'] ?? 'color';
-                $orientation = $data['orientation'] ?? 'portrait';
+                $pageFrom = isset($data['page_from']) && $data['page_from'] !== '' ? intval($data['page_from']) : null;
+                $pageTo   = isset($data['page_to']) && $data['page_to'] !== '' ? intval($data['page_to']) : null;
+                $colorMode = strval($data['color_mode'] ?? 'color');
+                $orientation = strval($data['orientation'] ?? 'portrait');
                 
                 echo "[print] 打印机: $printer, 文件: $filename, 扩展名: $fileExt, 份数: $copies, 色彩: $colorMode, 方向: $orientation\n";
                 
