@@ -175,7 +175,6 @@ install_printer_drivers() {
     apt-get install -y foomatic-db-compressed-ppds 2>/dev/null || true
     print_msg "安装Gutenprint驱动..."
     apt-get install -y printer-driver-gutenprint 2>/dev/null || print_warn "Gutenprint驱动安装跳过"
-    apt-get install -y printer-driver-cups-pdf 2>/dev/null || true
     apt-get install -y printer-driver-postscript-hp 2>/dev/null || true
     apt-get install -y printer-driver-pnm2ppa 2>/dev/null || true
     print_msg "打印机驱动安装完成"
