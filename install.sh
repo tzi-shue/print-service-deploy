@@ -277,11 +277,18 @@ install_libreoffice() {
 install_print_tools() {
     print_step "安装打印增强工具"
     
+    print_msg "安装 Ghostscript (PDF/PS处理)..."
+    apt-get install -y ghostscript 2>/dev/null || print_warn "ghostscript 安装跳过"
+    
     print_msg "安装 qpdf (PDF处理工具)..."
     apt-get install -y qpdf 2>/dev/null || print_warn "qpdf 安装跳过"
     
     print_msg "安装 ImageMagick (图片处理工具)..."
     apt-get install -y imagemagick 2>/dev/null || print_warn "ImageMagick 安装跳过"
+    
+    # 安装 pdfjam（用于横向打印PDF旋转，推荐）
+    print_msg "安装 pdfjam (PDF页面处理，横向打印必需)..."
+    apt-get install -y texlive-extra-utils 2>/dev/null || print_warn "pdfjam 安装跳过"
     
     # 可选：安装pdftk（某些系统可能没有）
     print_msg "安装 pdftk (PDF工具包)..."
@@ -290,6 +297,13 @@ install_print_tools() {
     # 验证安装
     echo ""
     print_msg "打印增强工具安装状态:"
+    
+    if command -v gs &> /dev/null; then
+        print_msg "  ✓ Ghostscript $(gs --version 2>&1)"
+    else
+        print_warn "  ✗ Ghostscript 未安装"
+    fi
+    
     if command -v qpdf &> /dev/null; then
         print_msg "  ✓ qpdf $(qpdf --version 2>&1 | head -1)"
     else
@@ -302,10 +316,16 @@ install_print_tools() {
         print_warn "  ✗ ImageMagick 未安装"
     fi
     
+    if command -v pdfjam &> /dev/null; then
+        print_msg "  ✓ pdfjam 已安装（横向打印支持）"
+    else
+        print_warn "  ✗ pdfjam 未安装（横向打印可能使用备选方案）"
+    fi
+    
     if command -v pdftk &> /dev/null; then
         print_msg "  ✓ pdftk 已安装"
     else
-        print_msg "  - pdftk 未安装（可选，qpdf可替代）"
+        print_msg "  - pdftk 未安装（可选）"
     fi
     
     print_msg "打印增强工具安装完成"
