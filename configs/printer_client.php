@@ -985,16 +985,28 @@ function executePrint(string $printerName, string $fileContent, string $filename
     
     try {
         if ($ext === 'pdf') {
+            $printPdf = $tmpFile;
+            $useRotatedPdf = false;
+            $landscapeOption = '';
+            
+            // 横向打印处理
+            if ($orientation === 'landscape') {
+                writeLog('INFO', "PDF需要横向打印，尝试转换PDF");
+                $rotatedPdf = rotatePdfForLandscape($tmpFile, $tmpDir);
+                if (!empty($rotatedPdf) && file_exists($rotatedPdf)) {
+                    $printPdf = $rotatedPdf;
+                    $useRotatedPdf = true;
+                    writeLog('INFO', "PDF已转换为横向", ['rotatedPdf' => $rotatedPdf]);
+                } else {
+                    // 转换失败，使用打印机的横向选项作为备选
+                    $landscapeOption = '-o landscape';
+                    writeLog('WARNING', "PDF转换失败，使用打印机横向选项");
+                }
+            }
+            
             $pageOption = '';
             if ($pageFrom !== null && $pageTo !== null && $pageFrom >= 1 && $pageTo >= $pageFrom) {
                 $pageOption = sprintf(' -P %d-%d', $pageFrom, $pageTo);
-            }
-            
-            // 构建横向打印选项
-            $orientOption = '';
-            if ($orientation === 'landscape') {
-                $orientOption = '-o orientation-requested=4';
-                writeLog('INFO', "PDF使用横向打印选项");
             }
 
             $cmd = sprintf('lp -d %s -n %d%s %s -o media=A4 %s -o fit-to-page %s 2>&1',
@@ -1002,30 +1014,55 @@ function executePrint(string $printerName, string $fileContent, string $filename
                 $copies,
                 $pageOption,
                 $lpOptions,
-                $orientOption,
-                escapeshellarg($tmpFile)
+                $landscapeOption,
+                escapeshellarg($printPdf)
             );
+            writeLog('INFO', "执行PDF打印命令", ['cmd' => $cmd]);
             exec($cmd, $output, $ret);
             $success = ($ret === 0);
             
-        } elseif (in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'bmp'])) {
-            // 构建横向打印选项
-            $orientOption = '';
-            if ($orientation === 'landscape') {
-                $orientOption = '-o orientation-requested=4';
-                writeLog('INFO', "图片使用横向打印选项");
+            // 清理旋转后的临时PDF
+            if ($useRotatedPdf && file_exists($printPdf)) {
+                @unlink($printPdf);
             }
             
-            $cmd = sprintf('lp -d %s -n %d %s -o media=A4 %s -o fit-to-page %s 2>&1',
+        } elseif (in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'bmp'])) {
+            $printFile = $tmpFile;
+            
+            // 横向打印：使用 ImageMagick 旋转图片90度
+            if ($orientation === 'landscape') {
+                writeLog('INFO', "图片需要横向打印，尝试旋转图片");
+                $rotatedImg = $tmpDir . 'rotated_' . uniqid() . '.' . $ext;
+                
+                // 使用 convert 命令旋转图片（ImageMagick）
+                $rotateCmd = sprintf('convert %s -rotate 90 %s 2>&1',
+                    escapeshellarg($tmpFile),
+                    escapeshellarg($rotatedImg)
+                );
+                exec($rotateCmd, $rotateOutput, $rotateRet);
+                
+                if ($rotateRet === 0 && file_exists($rotatedImg)) {
+                    $printFile = $rotatedImg;
+                    writeLog('INFO', "图片已旋转90度", ['rotatedImg' => $rotatedImg]);
+                } else {
+                    writeLog('WARNING', "图片旋转失败，使用原图打印", ['output' => implode('; ', $rotateOutput)]);
+                }
+            }
+            
+            $cmd = sprintf('lp -d %s -n %d %s -o media=A4 -o fit-to-page %s 2>&1',
                 escapeshellarg($printerName),
                 $copies,
                 $lpOptions,
-                $orientOption,
-                escapeshellarg($tmpFile)
+                escapeshellarg($printFile)
             );
             writeLog('INFO', "执行图片打印命令", ['cmd' => $cmd, 'orientation' => $orientation]);
             exec($cmd, $output, $ret);
             $success = ($ret === 0);
+            
+            // 清理旋转后的临时图片
+            if ($printFile !== $tmpFile && file_exists($printFile)) {
+                @unlink($printFile);
+            }
             
         } elseif (in_array($ext, ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'txt'])) {
             writeLog('INFO', "准备转换文档为PDF", ['file' => $tmpFile]);
@@ -1041,8 +1078,25 @@ function executePrint(string $printerName, string $fileContent, string $filename
             
             if (file_exists($pdf)) {
                 $printPdf = $pdf;
+                $useRotatedPdf = false;
+                $landscapeOption = '';
                 
-                // 页码范围选项（文档转PDF后也支持选页打印）
+                // 横向打印处理
+                if ($orientation === 'landscape') {
+                    writeLog('INFO', "文档需要横向打印，尝试转换PDF");
+                    $rotatedPdf = rotatePdfForLandscape($pdf, $tmpDir);
+                    if (!empty($rotatedPdf) && file_exists($rotatedPdf)) {
+                        $printPdf = $rotatedPdf;
+                        $useRotatedPdf = true;
+                        writeLog('INFO', "PDF已转换为横向", ['rotatedPdf' => $rotatedPdf]);
+                    } else {
+                        // 转换失败，使用打印机的横向选项作为备选
+                        $landscapeOption = '-o landscape';
+                        writeLog('WARNING', "PDF转换失败，使用打印机横向选项");
+                    }
+                }
+                
+                // 页码范围选项
                 $pageOption = '';
                 $pFrom = intval($pageFrom);
                 $pTo = intval($pageTo);
@@ -1053,22 +1107,12 @@ function executePrint(string $printerName, string $fileContent, string $filename
                 }
                 
                 // 构建打印命令
-                $mediaOption = '-o media=A4';
-                $orientOption = '';
-                if ($orientation === 'landscape') {
-                    // 横向打印：使用 orientation-requested=4 (landscape)
-                    // 注意：不同打印机可能需要不同的选项组合
-                    $orientOption = '-o orientation-requested=4';
-                    writeLog('INFO', "使用横向打印选项", ['orientOption' => $orientOption]);
-                }
-                
-                $cmd = sprintf('lp -d %s -n %d%s %s %s %s -o fit-to-page %s 2>&1',
+                $cmd = sprintf('lp -d %s -n %d%s %s -o media=A4 %s -o fit-to-page %s 2>&1',
                     escapeshellarg($printerName),
                     $copies,
                     $pageOption,
                     $lpOptions,
-                    $mediaOption,
-                    $orientOption,
+                    $landscapeOption,
                     escapeshellarg($printPdf)
                 );
                 writeLog('INFO', "执行文档打印命令", ['cmd' => $cmd, 'orientation' => $orientation]);
@@ -1077,7 +1121,7 @@ function executePrint(string $printerName, string $fileContent, string $filename
                 
                 // 清理临时文件
                 @unlink($pdf);
-                if ($printPdf !== $pdf && file_exists($printPdf)) {
+                if ($useRotatedPdf && file_exists($printPdf)) {
                     @unlink($printPdf);
                 }
             } else {
@@ -1130,50 +1174,60 @@ function buildLpOptions($colorMode, $orientation): string
 }
 
 /**
- * 旋转PDF为横向打印
- * 尝试使用 pdftk 或 qpdf 旋转PDF页面
- * 如果没有安装这些工具，返回空字符串表示失败
+ * 将PDF转换为横向打印格式
+ * 不旋转内容，而是将纵向页面内容缩放到横向页面上
  */
 function rotatePdfForLandscape($pdfFile, $tmpDir): string
 {
     $pdfFile = strval($pdfFile);
     $tmpDir = strval($tmpDir);
-    $rotatedPdf = $tmpDir . uniqid('rotated_') . '.pdf';
+    $rotatedPdf = $tmpDir . uniqid('landscape_') . '.pdf';
     
-    // 方法1: 使用 qpdf 旋转（推荐，更稳定）
-    exec('which qpdf 2>/dev/null', $whichQpdf, $whichQpdfRet);
-    if ($whichQpdfRet === 0) {
-        $qpdfCmd = sprintf('qpdf --rotate=+90 %s %s 2>&1',
-            escapeshellarg($pdfFile),
-            escapeshellarg($rotatedPdf)
+    // 方法1: 使用 pdfjam 将内容放到横向页面（推荐）
+    // --landscape 设置输出为横向，--fitpaper 自动适应
+    exec('which pdfjam 2>/dev/null', $whichPdfjam, $whichPdfjamRet);
+    if ($whichPdfjamRet === 0) {
+        // 使用 --angle 90 旋转内容，同时设置横向页面
+        $pdfjamCmd = sprintf('pdfjam --angle 90 --fitpaper true --rotateoversize true --outfile %s %s 2>&1',
+            escapeshellarg($rotatedPdf),
+            escapeshellarg($pdfFile)
         );
-        exec($qpdfCmd, $qpdfOutput, $qpdfRet);
+        exec($pdfjamCmd, $pdfjamOutput, $pdfjamRet);
         
-        if ($qpdfRet === 0 && file_exists($rotatedPdf)) {
-            writeLog('INFO', "PDF已使用qpdf旋转为横向", ['rotatedPdf' => $rotatedPdf]);
+        if ($pdfjamRet === 0 && file_exists($rotatedPdf)) {
+            writeLog('INFO', "PDF已使用pdfjam转换为横向", ['rotatedPdf' => $rotatedPdf]);
             return $rotatedPdf;
         }
-        writeLog('WARNING', "qpdf旋转失败", ['output' => implode('; ', $qpdfOutput)]);
+        writeLog('WARNING', "pdfjam转换失败", ['output' => implode('; ', $pdfjamOutput)]);
     }
     
-    // 方法2: 使用 pdftk 旋转
-    exec('which pdftk 2>/dev/null', $whichPdftk, $whichPdftkRet);
-    if ($whichPdftkRet === 0) {
-        $pdftkCmd = sprintf('pdftk %s cat 1-endright output %s 2>&1',
-            escapeshellarg($pdfFile),
-            escapeshellarg($rotatedPdf)
-        );
-        exec($pdftkCmd, $pdftkOutput, $pdftkRet);
+    // 方法2: 使用 ps2pdf 通过PostScript转换
+    exec('which ps2pdf 2>/dev/null', $whichPs2pdf, $whichPs2pdfRet);
+    if ($whichPs2pdfRet === 0) {
+        // 先转为PS，设置横向，再转回PDF
+        $tmpPs = $tmpDir . uniqid('tmp_') . '.ps';
+        $pdf2psCmd = sprintf('pdf2ps %s %s 2>&1', escapeshellarg($pdfFile), escapeshellarg($tmpPs));
+        exec($pdf2psCmd, $pdf2psOutput, $pdf2psRet);
         
-        if ($pdftkRet === 0 && file_exists($rotatedPdf)) {
-            writeLog('INFO', "PDF已使用pdftk旋转为横向", ['rotatedPdf' => $rotatedPdf]);
-            return $rotatedPdf;
+        if ($pdf2psRet === 0 && file_exists($tmpPs)) {
+            $ps2pdfCmd = sprintf('ps2pdf -sPAPERSIZE=a4 -dAutoRotatePages=/None %s %s 2>&1',
+                escapeshellarg($tmpPs),
+                escapeshellarg($rotatedPdf)
+            );
+            exec($ps2pdfCmd, $ps2pdfOutput, $ps2pdfRet);
+            @unlink($tmpPs);
+            
+            if ($ps2pdfRet === 0 && file_exists($rotatedPdf)) {
+                writeLog('INFO', "PDF已使用ps2pdf转换", ['rotatedPdf' => $rotatedPdf]);
+                return $rotatedPdf;
+            }
         }
-        writeLog('WARNING', "pdftk旋转失败", ['output' => implode('; ', $pdftkOutput)]);
+        writeLog('WARNING', "ps2pdf转换失败");
     }
     
-    // 没有安装任何工具或全部失败
-    writeLog('WARNING', "未安装PDF旋转工具(qpdf/pdftk)，无法横向打印");
+    // 方法3: 直接返回原文件，让打印机处理横向
+    // 某些打印机可以正确处理 -o landscape 选项
+    writeLog('WARNING', "未安装PDF转换工具(pdfjam/ps2pdf)，将尝试使用打印机横向选项");
     return '';
 }
 
