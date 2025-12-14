@@ -1,24 +1,15 @@
 #!/bin/bash
-# ============================================
-# WebSocket 打印客户端一键安装配置脚本
-# 适用于: Debian/Ubuntu/Armbian 系统
-# 功能: 检查环境、安装依赖、配置打印服务
-# ============================================
-
 set -e
 
-# 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# 配置变量
 INSTALL_DIR="/opt/websocket_printer"
 SERVICE_NAME="websocket-printer"
 LOG_FILE="/var/log/websocket_printer.log"
-# 远程文件地址
 REMOTE_BASE_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/configs"
 REMOTE_FILES=(
     "printer_client.php"
@@ -26,7 +17,6 @@ REMOTE_FILES=(
     "generate_qrcode.sh"
 )
 
-# 打印带颜色的消息
 print_msg() {
     echo -e "${GREEN}[INFO]${NC} $1"
 }
@@ -43,7 +33,6 @@ print_step() {
     echo -e "\n${BLUE}========== $1 ==========${NC}"
 }
 
-# 检查是否为root用户
 check_root() {
     if [ "$EUID" -ne 0 ]; then
         print_error "请使用 root 用户运行此脚本"
@@ -52,10 +41,8 @@ check_root() {
     fi
 }
 
-# 检测系统类型
 detect_system() {
     print_step "检测系统环境"
-    
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         OS=$ID
@@ -65,28 +52,21 @@ detect_system() {
         print_error "无法检测系统类型"
         exit 1
     fi
-    
-    # 检测架构
     ARCH=$(uname -m)
     print_msg "架构: $ARCH"
-    
-    # 检测内存
     TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
     print_msg "内存: ${TOTAL_MEM}MB"
-    
     if [ "$TOTAL_MEM" -lt 256 ]; then
         print_warn "内存较小，可能影响 LibreOffice 转换性能"
     fi
 }
 
-# 更新系统包
 update_system() {
     print_step "更新系统包列表"
     apt-get update -y
     print_msg "系统包列表已更新"
 }
 
-# 安装基础依赖
 install_base_deps() {
     print_step "安装基础依赖"
     
@@ -102,30 +82,22 @@ install_base_deps() {
     done
 }
 
-# 安装PHP及扩展
 install_php() {
     print_step "检查 PHP 环境"
-    
     REQUIRED_EXTS="curl mbstring json sockets"
     NEED_INSTALL=false
     MISSING_EXTS=""
-    
-    # 检查PHP是否已安装
     if command -v php &> /dev/null; then
         PHP_VERSION=$(php -v | head -n 1 | cut -d ' ' -f 2 | cut -d '.' -f 1,2)
         print_msg "PHP 已安装: $PHP_VERSION"
-        
-        # 检查扩展是否完整
         for ext in $REQUIRED_EXTS; do
             if ! php -m | grep -qi "^$ext$"; then
                 MISSING_EXTS="$MISSING_EXTS $ext"
                 NEED_INSTALL=true
             fi
         done
-        
         if [ "$NEED_INSTALL" = false ]; then
             print_msg "所有必要扩展已安装，跳过"
-            # 显示已安装的扩展
             for ext in $REQUIRED_EXTS; do
                 print_msg "  ✓ $ext"
             done
@@ -137,15 +109,11 @@ install_php() {
         print_msg "PHP 未安装，开始安装..."
         NEED_INSTALL=true
     fi
-    
-    # 安装PHP和扩展
     if [ "$NEED_INSTALL" = true ]; then
         if ! command -v php &> /dev/null; then
             print_msg "安装 PHP..."
             apt-get install -y php php-cli 2>/dev/null || apt-get install -y php7.4 php7.4-cli 2>/dev/null
         fi
-        
-        # 安装缺少的扩展
         print_msg "安装 PHP 扩展..."
         for ext in $REQUIRED_EXTS; do
             if ! php -m | grep -qi "^$ext$"; then
@@ -154,8 +122,6 @@ install_php() {
             fi
         done
     fi
-    
-    # 最终验证
     print_msg "验证 PHP 扩展..."
     for ext in $REQUIRED_EXTS; do
         if php -m | grep -qi "^$ext$"; then
@@ -166,28 +132,19 @@ install_php() {
     done
 }
 
-# 安装CUPS打印系统
 install_cups() {
     print_step "安装 CUPS 打印系统"
-    
     if command -v lpstat &> /dev/null; then
         print_msg "CUPS 已安装"
     else
         print_msg "安装 CUPS..."
         apt-get install -y cups cups-client cups-bsd
     fi
-    
-    # 启动CUPS服务
     print_msg "启动 CUPS 服务..."
     systemctl enable cups
     systemctl start cups
-    
-    # 配置CUPS（从远程拉取配置文件）
     if [ -f /etc/cups/cupsd.conf ]; then
-        # 备份配置
         cp /etc/cups/cupsd.conf /etc/cups/cupsd.conf.bak
-        
-        # 从远程下载cupsd.conf配置文件
         print_msg "从远程下载 CUPS 配置文件..."
         CUPSD_CONF_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/configs/cupsd.conf"
         if curl -sSL -o /etc/cups/cupsd.conf "$CUPSD_CONF_URL"; then
@@ -198,67 +155,39 @@ install_cups() {
             cp /etc/cups/cupsd.conf.bak /etc/cups/cupsd.conf
         fi
     fi
-    
     print_msg "CUPS 状态: $(systemctl is-active cups)"
 }
 
-# 安装打印机驱动
 install_printer_drivers() {
     print_step "安装打印机驱动"
-    
     print_msg "安装通用打印机驱动..."
     apt-get install -y printer-driver-all 2>/dev/null || apt-get install -y printer-driver-gutenprint
-    
-    # 安装常见品牌驱动
     print_msg "安装品牌驱动..."
-    
-    # HP打印机
     apt-get install -y hplip 2>/dev/null || print_warn "HP驱动安装跳过"
-    
-    # 三星/施乐打印机 (使用splix)
     apt-get install -y printer-driver-splix 2>/dev/null || print_warn "Samsung/Xerox驱动安装跳过"
-    
-    # 联想/Brother打印机 (联想部分型号兼容Brother驱动)
     print_msg "安装联想/兄弟打印机驱动..."
     apt-get install -y printer-driver-brlaser 2>/dev/null || print_warn "Lenovo/Brother驱动安装跳过"
-    
-    # Epson打印机
     apt-get install -y printer-driver-escpr 2>/dev/null || print_warn "Epson驱动安装跳过"
-    
-    # Canon打印机
     apt-get install -y printer-driver-cnijfilter2 2>/dev/null || print_warn "Canon驱动安装跳过"
-    
-    # Foomatic驱动引擎 (提供大量第三方驱动支持)
     print_msg "安装Foomatic驱动引擎..."
     apt-get install -y foomatic-db-engine 2>/dev/null || print_warn "Foomatic引擎安装跳过"
     apt-get install -y foomatic-db 2>/dev/null || true
     apt-get install -y foomatic-db-compressed-ppds 2>/dev/null || true
-    
-    # Gutenprint驱动 (支持大量打印机型号)
     print_msg "安装Gutenprint驱动..."
     apt-get install -y printer-driver-gutenprint 2>/dev/null || print_warn "Gutenprint驱动安装跳过"
-    
-    # PostScript/PDF支持
     apt-get install -y printer-driver-cups-pdf 2>/dev/null || true
-    
-    # OpenPrinting驱动 (更多通用驱动)
     apt-get install -y printer-driver-postscript-hp 2>/dev/null || true
     apt-get install -y printer-driver-pnm2ppa 2>/dev/null || true
-    
     print_msg "打印机驱动安装完成"
 }
 
-# 安装LibreOffice（用于文档转换）
 install_libreoffice() {
     print_step "安装 LibreOffice (文档转换)"
-    
     if command -v libreoffice &> /dev/null; then
         LO_VERSION=$(libreoffice --version | head -n 1)
         print_msg "LibreOffice 已安装: $LO_VERSION"
     else
         print_msg "安装 LibreOffice (这可能需要几分钟)..."
-        
-        # 根据内存大小选择安装方式
         if [ "$TOTAL_MEM" -lt 512 ]; then
             print_warn "内存较小，安装精简版..."
             apt-get install -y libreoffice-writer-nogui libreoffice-calc-nogui 2>/dev/null || \
@@ -267,83 +196,60 @@ install_libreoffice() {
             apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress
         fi
     fi
-    
-    # 创建LibreOffice临时目录
     mkdir -p /tmp/.libreoffice
     chmod 777 /tmp/.libreoffice
 }
 
-# 安装打印增强工具（用于横向打印、PDF旋转等）
 install_print_tools() {
     print_step "安装打印增强工具"
-    
     print_msg "安装 Ghostscript (PDF/PS处理)..."
     apt-get install -y ghostscript 2>/dev/null || print_warn "ghostscript 安装跳过"
-    
     print_msg "安装 qpdf (PDF处理工具)..."
     apt-get install -y qpdf 2>/dev/null || print_warn "qpdf 安装跳过"
-    
     print_msg "安装 ImageMagick (图片处理工具)..."
     apt-get install -y imagemagick 2>/dev/null || print_warn "ImageMagick 安装跳过"
-    
-    # 安装 pdfjam（用于横向打印PDF旋转，推荐）
     print_msg "安装 pdfjam (PDF页面处理，横向打印必需)..."
     apt-get install -y texlive-extra-utils 2>/dev/null || print_warn "pdfjam 安装跳过"
-    
-    # 可选：安装pdftk（某些系统可能没有）
     print_msg "安装 pdftk (PDF工具包)..."
     apt-get install -y pdftk-java 2>/dev/null || apt-get install -y pdftk 2>/dev/null || print_warn "pdftk 安装跳过（可选）"
-    
-    # 验证安装
     echo ""
     print_msg "打印增强工具安装状态:"
-    
     if command -v gs &> /dev/null; then
         print_msg "  ✓ Ghostscript $(gs --version 2>&1)"
     else
         print_warn "  ✗ Ghostscript 未安装"
     fi
-    
     if command -v qpdf &> /dev/null; then
         print_msg "  ✓ qpdf $(qpdf --version 2>&1 | head -1)"
     else
         print_warn "  ✗ qpdf 未安装"
     fi
-    
     if command -v convert &> /dev/null; then
         print_msg "  ✓ ImageMagick $(convert --version 2>&1 | head -1 | cut -d' ' -f3)"
     else
         print_warn "  ✗ ImageMagick 未安装"
     fi
-    
     if command -v pdfjam &> /dev/null; then
         print_msg "  ✓ pdfjam 已安装（横向打印支持）"
     else
         print_warn "  ✗ pdfjam 未安装（横向打印可能使用备选方案）"
     fi
-    
     if command -v pdftk &> /dev/null; then
         print_msg "  ✓ pdftk 已安装"
     else
         print_msg "  - pdftk 未安装（可选）"
     fi
-    
     print_msg "打印增强工具安装完成"
 }
 
-# 下载远程文件
 download_files() {
     print_step "下载客户端文件"
-    
-    # 创建安装目录
     mkdir -p $INSTALL_DIR
-    
     for file in "${REMOTE_FILES[@]}"; do
         print_msg "下载 $file..."
         if curl -sSL -o "$INSTALL_DIR/$file" "$REMOTE_BASE_URL/$file"; then
             print_msg "  ✓ $file 下载成功"
         else
-            # 尝试从本地复制
             SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
             if [ -f "$SCRIPT_DIR/$file" ]; then
                 cp "$SCRIPT_DIR/$file" "$INSTALL_DIR/"
@@ -353,83 +259,55 @@ download_files() {
             fi
         fi
     done
-    
-    # 验证必要文件
     if [ ! -f "$INSTALL_DIR/printer_client.php" ]; then
         print_error "printer_client.php 下载失败"
         exit 1
     fi
-    
-    # 设置权限
     chmod +x "$INSTALL_DIR/printer_client.php"
     chmod +x "$INSTALL_DIR/generate_qrcode.sh" 2>/dev/null || true
-    
-    # 创建日志文件
     touch $LOG_FILE
     chmod 666 $LOG_FILE
-    
     print_msg "文件下载完成"
 }
 
-# 安装WebSocket客户端（兼容旧函数名）
 install_websocket_client() {
     download_files
 }
 
-# 配置服务器地址
 configure_server() {
     print_step "配置服务器连接"
-    
-    # 读取当前配置（从$WS_SERVER变量）
     CURRENT_SERVER=$(grep -oP "\\\$WS_SERVER = '\K[^']+" "$INSTALL_DIR/printer_client.php" 2>/dev/null || echo "")
-    
-    # 如果已有有效配置，跳过
     if [ -n "$CURRENT_SERVER" ] && [ "$CURRENT_SERVER" != "ws://your-server:8089" ]; then
         print_msg "服务器地址已配置: $CURRENT_SERVER"
         print_msg "如需修改，请编辑: $INSTALL_DIR/printer_client.php"
         return
     fi
-    
-    # 使用文件内置的默认服务器地址
     print_msg "使用内置默认服务器地址"
 }
 
-# 获取设备ID（与printer_client.php保持一致，随机ID + /etc/printer-device-id）
 get_device_id() {
     local idFile="/etc/printer-device-id"
-
-    # 1. 首先尝试从已保存的文件中读取
     if [ -f "$idFile" ]; then
         DEVICE_ID=$(cat "$idFile" 2>/dev/null | tr -d '\r\n')
-        # 验证设备ID格式是否为32位十六进制
-        if [[ "$DEVICE_ID" =~ ^[0-9a-fA-F]{32}$ ]]; then
+        if [[ "$DEVICE_ID" =~ ^[0-9a-fA-F]{30,32}$ ]]; then
             echo "${DEVICE_ID,,}"
             return 0
         fi
     fi
-
-    # 2. 文件不存在或内容不合法时，生成一个新的随机ID（32位十六进制）
     if command -v openssl >/dev/null 2>&1; then
-        DEVICE_ID=$(openssl rand -hex 16 2>/dev/null)
+        DEVICE_ID=$(openssl rand -hex 15 2>/dev/null)
     else
-        # 退化方案：使用 /dev/urandom 生成
-        DEVICE_ID=$(head -c 16 /dev/urandom | hexdump -e '16/1 "%02x" "\n"' 2>/dev/null)
+        DEVICE_ID=$(head -c 15 /dev/urandom | hexdump -e '15/1 "%02x" "\n"' 2>/dev/null)
     fi
-
-    # 再次校验生成的ID
-    if [[ -z "$DEVICE_ID" || ! "$DEVICE_ID" =~ ^[0-9a-fA-F]{32}$ ]]; then
-        echo ""  # 返回空表示失败
+    if [[ -z "$DEVICE_ID" || ! "$DEVICE_ID" =~ ^[0-9a-fA-F]{30}$ ]]; then
+        echo ""
         return 1
     fi
-
-    # 3. 保存设备ID到文件
     echo "${DEVICE_ID,,}" > "$idFile" 2>/dev/null || return 1
     chmod 644 "$idFile" 2>/dev/null || true
-
     echo "${DEVICE_ID,,}"
 }
 
-# 显示设备ID信息
 configure_device_id() {
     print_step "设备ID信息"
     
@@ -442,18 +320,13 @@ configure_device_id() {
     print_msg "设备ID: $DEVICE_ID"
 }
 
-# 创建systemd服务
 create_service() {
     print_step "创建系统服务"
-    
-    # 如果下载了service文件，使用它
     if [ -f "$INSTALL_DIR/printer-client.service" ]; then
         print_msg "使用下载的服务配置文件"
-        # 更新路径
         sed -i "s|/opt/printer-client|$INSTALL_DIR|g" "$INSTALL_DIR/printer-client.service"
         cp "$INSTALL_DIR/printer-client.service" /etc/systemd/system/${SERVICE_NAME}.service
     else
-        # 否则创建默认配置
         print_msg "创建默认服务配置"
         cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
 [Unit]
@@ -469,8 +342,6 @@ User=root
 WorkingDirectory=$INSTALL_DIR
 StandardOutput=append:$LOG_FILE
 StandardError=append:$LOG_FILE
-
-# 环境变量
 Environment=HOME=/tmp
 Environment=SHELL=/bin/bash
 
@@ -478,39 +349,27 @@ Environment=SHELL=/bin/bash
 WantedBy=multi-user.target
 EOF
     fi
-
-    # 重载systemd
     systemctl daemon-reload
-    
-    # 启用服务
     systemctl enable $SERVICE_NAME
-    
     print_msg "服务已创建: $SERVICE_NAME"
 }
 
-# 检测已连接的打印机
 detect_printers() {
     print_step "检测打印机"
-    
     print_msg "已配置的打印机:"
     echo ""
     lpstat -a 2>/dev/null || echo "  (无)"
     echo ""
-    
     print_msg "默认打印机:"
     lpstat -d 2>/dev/null || echo "  (未设置)"
     echo ""
-    
-    # 检测USB打印机
     print_msg "USB 设备:"
     lsusb 2>/dev/null | grep -i "print\|samsung\|hp\|canon\|epson\|brother" || echo "  (未检测到打印机USB设备)"
     echo ""
 }
 
-# 添加打印机向导
 add_printer_wizard() {
     print_step "添加打印机"
-    
     echo ""
     echo "添加打印机方式:"
     echo "  1. 通过 CUPS Web 界面 (推荐)"
@@ -519,50 +378,36 @@ add_printer_wizard() {
     echo "  4. 跳过"
     echo ""
     read -p "请选择 [1-4]: " CHOICE
-    
     case $CHOICE in
         1)
             print_msg "请在浏览器中访问: http://$(hostname -I | awk '{print $1}'):631"
             print_msg "用户名: root, 密码: 系统root密码"
             ;;
         2)
-            # USB打印机
             print_msg "检测 USB 打印机..."
             lpinfo -v 2>/dev/null | grep usb || echo "未检测到USB打印机"
             echo ""
             read -p "请输入打印机URI (如 usb://...): " PRINTER_URI
             read -p "请输入打印机名称: " PRINTER_NAME
-            
             if [ -n "$PRINTER_URI" ] && [ -n "$PRINTER_NAME" ]; then
-                # 查找驱动
                 print_msg "查找驱动..."
                 lpinfo -m | head -20
                 echo ""
                 read -p "请输入驱动名称 (如 drv:///...): " DRIVER
-                
                 lpadmin -p "$PRINTER_NAME" -v "$PRINTER_URI" -m "$DRIVER" -E
                 print_msg "打印机 $PRINTER_NAME 已添加"
             fi
             ;;
         3)
-            # 网络打印机
             read -p "请输入打印机IP地址: " PRINTER_IP
             read -p "请输入打印机名称: " PRINTER_NAME
             read -p "协议 [ipp/lpd/socket] (默认ipp): " PROTOCOL
             PROTOCOL=${PROTOCOL:-ipp}
-            
             case $PROTOCOL in
-                ipp)
-                    PRINTER_URI="ipp://$PRINTER_IP/ipp/print"
-                    ;;
-                lpd)
-                    PRINTER_URI="lpd://$PRINTER_IP/queue"
-                    ;;
-                socket)
-                    PRINTER_URI="socket://$PRINTER_IP:9100"
-                    ;;
+                ipp) PRINTER_URI="ipp://$PRINTER_IP/ipp/print" ;;
+                lpd) PRINTER_URI="lpd://$PRINTER_IP/queue" ;;
+                socket) PRINTER_URI="socket://$PRINTER_IP:9100" ;;
             esac
-            
             if [ -n "$PRINTER_NAME" ]; then
                 lpadmin -p "$PRINTER_NAME" -v "$PRINTER_URI" -m everywhere -E 2>/dev/null || \
                 lpadmin -p "$PRINTER_NAME" -v "$PRINTER_URI" -m raw -E
@@ -575,43 +420,30 @@ add_printer_wizard() {
     esac
 }
 
-# 生成设备二维码
 generate_qrcode() {
     print_step "生成设备二维码"
-    
-    # 检查是否有generate_qrcode.sh
     if [ -f "$INSTALL_DIR/generate_qrcode.sh" ]; then
         print_msg "使用 generate_qrcode.sh 生成二维码..."
         chmod +x "$INSTALL_DIR/generate_qrcode.sh"
         bash "$INSTALL_DIR/generate_qrcode.sh"
         return
     fi
-    
-    # 从get_device_id函数获取设备ID（与printer_client.php一致）
     DEVICE_ID=$(get_device_id)
-    
     if [ -z "$DEVICE_ID" ]; then
         print_error "无法获取设备ID"
         return
     fi
-    
     QR_CONTENT="device://$DEVICE_ID"
     print_msg "设备ID: $DEVICE_ID"
     print_msg "二维码内容: $QR_CONTENT"
-    
-    # 检查是否安装了qrencode，没有则自动安装
     if ! command -v qrencode &> /dev/null; then
         print_msg "安装 qrencode..."
         apt-get install -y qrencode >/dev/null 2>&1
     fi
-    
     if command -v qrencode &> /dev/null; then
-        # 生成二维码图片
         QR_FILE="/tmp/device_qr_$DEVICE_ID.png"
         qrencode -o "$QR_FILE" -s 10 "$QR_CONTENT"
         print_msg "二维码图片已保存: $QR_FILE"
-        
-        # 在终端显示
         echo ""
         qrencode -t ANSIUTF8 "$QR_CONTENT"
         echo ""
@@ -623,13 +455,10 @@ generate_qrcode() {
     fi
 }
 
-# 启动服务
 start_service() {
     print_step "启动服务"
-    
     systemctl start $SERVICE_NAME
     sleep 2
-    
     if systemctl is-active --quiet $SERVICE_NAME; then
         print_msg "服务启动成功!"
     else
@@ -638,10 +467,8 @@ start_service() {
     fi
 }
 
-# 显示安装摘要
 show_summary() {
     print_step "安装完成"
-    
     echo ""
     echo "============================================"
     echo "  WebSocket 打印客户端安装完成!"
@@ -660,40 +487,26 @@ show_summary() {
     echo ""
     echo "CUPS管理: http://$(hostname -I | awk '{print $1}'):631"
     echo ""
-    
-    # 显示当前状态
     echo "当前服务状态:"
     systemctl status $SERVICE_NAME --no-pager -l | head -10
 }
 
-# 卸载函数
 uninstall() {
     print_step "卸载 WebSocket 打印客户端"
-    
     read -p "确定要卸载吗? [y/N]: " CONFIRM
     if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
         print_msg "取消卸载"
         exit 0
     fi
-    
-    # 停止并禁用服务
     systemctl stop $SERVICE_NAME 2>/dev/null || true
     systemctl disable $SERVICE_NAME 2>/dev/null || true
-    
-    # 删除服务文件
     rm -f /etc/systemd/system/${SERVICE_NAME}.service
     systemctl daemon-reload
-    
-    # 删除安装目录
     rm -rf $INSTALL_DIR
-    
-    # 删除日志
     rm -f $LOG_FILE
-    
     print_msg "卸载完成"
 }
 
-# 主菜单
 show_menu() {
     echo ""
     echo "============================================"
@@ -767,7 +580,6 @@ show_menu() {
     esac
 }
 
-# 完整安装流程
 full_install() {
     check_root
     detect_system
@@ -783,17 +595,13 @@ full_install() {
     configure_device_id
     create_service
     detect_printers
-    
     echo ""
     read -p "是否现在添加打印机? [y/N]: " ADD_PRINTER
     if [ "$ADD_PRINTER" = "y" ] || [ "$ADD_PRINTER" = "Y" ]; then
         add_printer_wizard
     fi
-    
     start_service
     show_summary
-    
-    # 生成二维码
     echo ""
     read -p "是否生成设备二维码? [Y/n]: " GEN_QR
     if [ "$GEN_QR" != "n" ] && [ "$GEN_QR" != "N" ]; then
@@ -801,9 +609,7 @@ full_install() {
     fi
 }
 
-# 脚本入口
 main() {
-    # 检查参数
     case "${1:-}" in
         --install|-i)
             full_install
