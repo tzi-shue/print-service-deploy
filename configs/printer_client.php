@@ -212,6 +212,7 @@ function getDeviceId(): string
 
     if (file_exists($idFile)) {
         $id = trim(@file_get_contents($idFile) ?: '');
+        // 兼容30位（新）和32位（老）设备ID
         if ($id !== '' && preg_match('/^[0-9a-fA-F]{30,32}$/', $id)) {
             return strtolower($id);
         }
@@ -1097,7 +1098,6 @@ function executePrint(string $printerName, string $fileContent, string $filename
                     writeLog('INFO', "文档选页打印", ['pageOption' => $pageOption]);
                 }
                 
-                // 构建打印命令
                 $cmd = sprintf('lp -d %s -n %d%s %s -o media=A4 %s -o fit-to-page %s 2>&1',
                     escapeshellarg($printerName),
                     $copies,
@@ -1110,7 +1110,6 @@ function executePrint(string $printerName, string $fileContent, string $filename
                 exec($cmd, $output, $ret);
                 $success = ($ret === 0);
                 
-                // 清理临时文件
                 @unlink($pdf);
                 if ($useRotatedPdf && file_exists($printPdf)) {
                     @unlink($printPdf);
@@ -1724,8 +1723,6 @@ class PrinterClient
                 $lines = intval($data['lines'] ?? 200);
                 $date = $data['date'] ?? '';
                 
-                writeLog('INFO', "收到获取日志请求", ['lines' => $lines, 'date' => $date]);
-                
                 $logResult = getLogContent($lines, $date);
                 $this->send([
                     'action' => 'logs_result',
@@ -1803,18 +1800,14 @@ initLogDir();
 writeLog('INFO', "========================================");
 writeLog('INFO', "  打印机客户端 v" . CLIENT_VERSION);
 writeLog('INFO', "========================================");
-writeLog('INFO', "服务器: $WS_SERVER");
 writeLog('INFO', "设备ID: $deviceId");
 writeLog('INFO', "启动时间: " . date('Y-m-d H:i:s'));
 
 echo "========================================\n";
 echo "  打印机客户端 v" . CLIENT_VERSION . "\n";
 echo "========================================\n";
-echo "服务器: $WS_SERVER\n";
 echo "设备ID: $deviceId\n";
 echo "启动时间: " . date('Y-m-d H:i:s') . "\n";
-echo "----------------------------------------\n";
-echo "二维码内容: $qrContent\n";
 echo "----------------------------------------\n";
 
 $qrCmd = "command -v qrencode > /dev/null 2>&1 && qrencode -t ANSI '$qrContent' 2>/dev/null";
