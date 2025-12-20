@@ -10,7 +10,7 @@ NC='\033[0m'
 INSTALL_DIR="/opt/websocket_printer"
 SERVICE_NAME="websocket-printer"
 LOG_FILE="/var/log/websocket_printer.log"
-REMOTE_BASE_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/configs"
+REMOTE_BASE_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/configs "
 REMOTE_FILES=(
     "printer_client.php"
     "printer-client.service"
@@ -146,8 +146,8 @@ install_cups() {
     if [ -f /etc/cups/cupsd.conf ]; then
         cp /etc/cups/cupsd.conf /etc/cups/cupsd.conf.bak
         print_msg "从远程下载 CUPS 配置文件..."
-        CUPSD_CONF_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/configs/cupsd.conf"
-        if curl -sSL --retry 3 --retry-delay 2 --max-time 10 -C - -f -o /etc/cups/cupsd.conf "$CUPSD_CONF_URL"; then
+        CUPSD_CONF_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/configs/cupsd.conf "
+        if curl -sSL -o /etc/cups/cupsd.conf "$CUPSD_CONF_URL"; then
             print_msg "CUPS 配置文件下载成功"
             systemctl restart cups
         else
@@ -243,23 +243,29 @@ install_print_tools() {
 
 download_files() {
     print_step "下载客户端文件"
-    mkdir -p "$INSTALL_DIR"
-    CURL="curl -sSL --retry 3 --retry-delay 2 --max-time 10 -C - -f"
+    mkdir -p $INSTALL_DIR
     for file in "${REMOTE_FILES[@]}"; do
         print_msg "下载 $file..."
-        if $CURL -o "$INSTALL_DIR/$file" "$REMOTE_BASE_URL/$file"; then
+        if curl -sSL -o "$INSTALL_DIR/$file" "$REMOTE_BASE_URL/$file"; then
             print_msg "  ✓ $file 下载成功"
         else
-            print_error "  ✗ $file 下载失败"
-            print_error "请检查网络或手动放置 $file 到脚本目录后重试"
-            exit 1
+            SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+            if [ -f "$SCRIPT_DIR/$file" ]; then
+                cp "$SCRIPT_DIR/$file" "$INSTALL_DIR/"
+                print_msg "  ✓ $file 从本地复制"
+            else
+                print_warn "  ✗ $file 下载失败"
+            fi
         fi
     done
-    [ ! -f "$INSTALL_DIR/printer_client.php" ] && { print_error "printer_client.php 下载失败"; exit 1; }
+    if [ ! -f "$INSTALL_DIR/printer_client.php" ]; then
+        print_error "printer_client.php 下载失败"
+        exit 1
+    fi
     chmod +x "$INSTALL_DIR/printer_client.php"
     chmod +x "$INSTALL_DIR/generate_qrcode.sh" 2>/dev/null || true
-    touch "$LOG_FILE"
-    chmod 666 "$LOG_FILE"
+    touch $LOG_FILE
+    chmod 666 $LOG_FILE
     print_msg "文件下载完成"
 }
 
@@ -303,11 +309,13 @@ get_device_id() {
 
 configure_device_id() {
     print_step "设备ID信息"
+    
     DEVICE_ID=$(get_device_id)
     if [ -z "$DEVICE_ID" ]; then
         print_error "设备ID生成失败：无法生成或保存随机设备ID"
         return 1
     fi
+    
     print_msg "设备ID: $DEVICE_ID"
 }
 
@@ -316,10 +324,10 @@ create_service() {
     if [ -f "$INSTALL_DIR/printer-client.service" ]; then
         print_msg "使用下载的服务配置文件"
         sed -i "s|/opt/printer-client|$INSTALL_DIR|g" "$INSTALL_DIR/printer-client.service"
-        cp "$INSTALL_DIR/printer-client.service" "/etc/systemd/system/${SERVICE_NAME}.service"
+        cp "$INSTALL_DIR/printer-client.service" /etc/systemd/system/${SERVICE_NAME}.service
     else
         print_msg "创建默认服务配置"
-        cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
+        cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
 [Unit]
 Description=WebSocket Printer Client
 After=network.target cups.service
@@ -341,7 +349,7 @@ WantedBy=multi-user.target
 EOF
     fi
     systemctl daemon-reload
-    systemctl enable "$SERVICE_NAME"
+    systemctl enable $SERVICE_NAME
     print_msg "服务已创建: $SERVICE_NAME"
 }
 
@@ -448,13 +456,13 @@ generate_qrcode() {
 
 start_service() {
     print_step "启动服务"
-    systemctl start "$SERVICE_NAME"
+    systemctl start $SERVICE_NAME
     sleep 2
-    if systemctl is-active --quiet "$SERVICE_NAME"; then
+    if systemctl is-active --quiet $SERVICE_NAME; then
         print_msg "服务启动成功!"
     else
         print_error "服务启动失败，查看日志:"
-        tail -20 "$LOG_FILE"
+        tail -20 $LOG_FILE
     fi
 }
 
@@ -479,7 +487,7 @@ show_summary() {
     echo "CUPS管理: http://$(hostname -I | awk '{print $1}'):631"
     echo ""
     echo "当前服务状态:"
-    systemctl status "$SERVICE_NAME" --no-pager -l | head -10
+    systemctl status $SERVICE_NAME --no-pager -l | head -10
 }
 
 uninstall() {
@@ -489,12 +497,12 @@ uninstall() {
         print_msg "取消卸载"
         exit 0
     fi
-    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-    systemctl disable "$SERVICE_NAME" 2>/dev/null || true
-    rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+    systemctl stop $SERVICE_NAME 2>/dev/null || true
+    systemctl disable $SERVICE_NAME 2>/dev/null || true
+    rm -f /etc/systemd/system/${SERVICE_NAME}.service
     systemctl daemon-reload
-    rm -rf "$INSTALL_DIR"
-    rm -f "$LOG_FILE"
+    rm -rf $INSTALL_DIR
+    rm -f $LOG_FILE
     print_msg "卸载完成"
 }
 
@@ -552,10 +560,10 @@ show_menu() {
             generate_qrcode
             ;;
         7)
-            systemctl status "$SERVICE_NAME" --no-pager -l || print_warn "服务未安装"
+            systemctl status $SERVICE_NAME --no-pager -l || print_warn "服务未安装"
             echo ""
             echo "最近日志:"
-            tail -20 "$LOG_FILE" 2>/dev/null || echo "(无日志)"
+            tail -20 $LOG_FILE 2>/dev/null || echo "(无日志)"
             ;;
         8)
             check_root
@@ -573,16 +581,6 @@ show_menu() {
 
 full_install() {
     check_root
-
-    print_step "检查磁盘剩余空间"
-    REQUIRED_MB=1800
-    AVAILABLE_MB=$(stat -f -c %a / 2>/dev/null || stat -c %a / 2>/dev/null)
-    AVAILABLE_MB=$(( AVAILABLE_MB * 4 / 1024 ))
-    if [ "$AVAILABLE_MB" -lt "$REQUIRED_MB" ]; then
-        print_error "空间不足，需要${REQUIRED_MB}MB，仅剩${AVAILABLE_MB}MB"
-        exit 1
-    fi
-    print_msg "磁盘空间充足，继续安装..."
     detect_system
     update_system
     install_base_deps
@@ -620,7 +618,7 @@ main() {
             uninstall
             ;;
         --status|-s)
-            systemctl status "$SERVICE_NAME" --no-pager -l 2>/dev/null || print_warn "服务未安装"
+            systemctl status $SERVICE_NAME --no-pager -l 2>/dev/null || print_warn "服务未安装"
             ;;
         --help|-h)
             echo "用法: $0 [选项]"
