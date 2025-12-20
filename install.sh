@@ -146,7 +146,7 @@ install_cups() {
     if [ -f /etc/cups/cupsd.conf ]; then
         cp /etc/cups/cupsd.conf /etc/cups/cupsd.conf.bak
         print_msg "从远程下载 CUPS 配置文件..."
-        CUPSD_CONF_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/configs/cupsd.conf "
+        CUPSD_CONF_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/configs/cupsd.conf"
         if curl -sSL -o /etc/cups/cupsd.conf "$CUPSD_CONF_URL"; then
             print_msg "CUPS 配置文件下载成功"
             systemctl restart cups
