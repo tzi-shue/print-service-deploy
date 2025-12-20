@@ -140,7 +140,7 @@ install_cups() {
         print_msg "检测到已安装 CUPS 版本: $CUPS_VERSION"
         print_msg "跳过 CUPS 安装"
     else
-        print_msg "未检测到 CUPS，开始安装 CUPS 2.4.14..."
+        print_msg "未检测到 CUPS，开始安装 CUPS 2.4.16..."
         
         print_msg "安装编译依赖..."
         apt-get install -y build-essential libavahi-client-dev libgnutls28-dev \
@@ -152,7 +152,7 @@ install_cups() {
             exit 1
         }
         
-        CUPS_VERSION="2.4.14"
+        CUPS_VERSION="2.4.16"
         CUPS_URL="https://github.com/OpenPrinting/cups/releases/download/v${CUPS_VERSION}/cups-${CUPS_VERSION}-source.tar.gz"
         CUPS_DIR="/tmp/cups-${CUPS_VERSION}"
         
@@ -195,7 +195,7 @@ install_cups() {
         cd /tmp
         rm -rf cups-${CUPS_VERSION} cups-${CUPS_VERSION}-source.tar.gz
         
-        print_msg "CUPS 2.4.14 安装成功"
+        print_msg "CUPS 2.4.16 安装成功"
     fi
     
     print_msg "启动 CUPS 服务..."
