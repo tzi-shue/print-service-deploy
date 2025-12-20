@@ -576,14 +576,13 @@ full_install() {
 
     print_step "检查磁盘剩余空间"
     REQUIRED_MB=1800
-    AVAILABLE_MB=$(df -m / | awk 'NR==2 {print $4}')
-    print_msg "根分区剩余 ${AVAILABLE_MB} MB，预计需要 ${REQUIRED_MB} MB"
+    AVAILABLE_MB=$(stat -f -c %a / 2>/dev/null || stat -c %a / 2>/dev/null)
+    AVAILABLE_MB=$(( AVAILABLE_MB * 4 / 1024 ))
     if [ "$AVAILABLE_MB" -lt "$REQUIRED_MB" ]; then
-        print_error "磁盘空间不足！至少需要 ${REQUIRED_MB} MB，当前仅剩 ${AVAILABLE_MB} MB"
+        print_error "空间不足，需要${REQUIRED_MB}MB，仅剩${AVAILABLE_MB}MB"
         exit 1
     fi
     print_msg "磁盘空间充足，继续安装..."
-
     detect_system
     update_system
     install_base_deps
