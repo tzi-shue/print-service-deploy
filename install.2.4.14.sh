@@ -153,7 +153,7 @@ install_cups() {
         }
         
         CUPS_VERSION="2.4.16"
-        CUPS_URL="https://github.com/OpenPrinting/cups/releases/download/v${CUPS_VERSION}/cups-${CUPS_VERSION}-source.tar.gz"
+        CUPS_URL="https://ghproxy.cfd/https://github.com/OpenPrinting/cups/releases/download/v${CUPS_VERSION}/cups-${CUPS_VERSION}-source.tar.gz"
         CUPS_DIR="/tmp/cups-${CUPS_VERSION}"
         
         print_msg "下载 CUPS ${CUPS_VERSION} 源码..."
