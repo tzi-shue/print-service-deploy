@@ -576,7 +576,7 @@ full_install() {
 
     print_step "检查磁盘剩余空间"
     REQUIRED_MB=1800
-    AVAILABLE_MB=$(df / | awk 'NR==2 {printf "%.0f", $4/1024}')
+    AVAILABLE_MB=$(df -m / | awk 'NR==2 {print $4}')
     print_msg "根分区剩余 ${AVAILABLE_MB} MB，预计需要 ${REQUIRED_MB} MB"
     if [ "$AVAILABLE_MB" -lt "$REQUIRED_MB" ]; then
         print_error "磁盘空间不足！至少需要 ${REQUIRED_MB} MB，当前仅剩 ${AVAILABLE_MB} MB"
