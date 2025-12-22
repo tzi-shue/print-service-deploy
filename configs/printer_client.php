@@ -1,6 +1,6 @@
 #!/usr/bin/env php
 <?php
-define('CLIENT_VERSION', '1.0.7');
+define('CLIENT_VERSION', '1.0.8');
 define('LOG_DIR', '/var/log/printer-client/');
 define('LOG_RETENTION_DAYS', 2);
 define('PRINT_TEMP_DIR', '/tmp/print_jobs/');
@@ -174,6 +174,177 @@ function cleanTempPrintFiles(): array
     return ['cleaned' => $cleaned, 'errors' => $errors];
 }
 
+/**
+ * 获取CUPS打印队列
+ * @param string $printerName 可选，指定打印机名称
+ * @return array 打印任务列表
+ */
+function getCupsJobs(string $printerName = ''): array
+{
+    $jobs = [];
+    
+    // 使用 lpstat -o 获取所有打印任务
+    $cmd = 'LANG=C lpstat -o';
+    if (!empty($printerName)) {
+        $cmd .= ' ' . escapeshellarg($printerName);
+    }
+    $cmd .= ' 2>&1';
+    
+    $output = [];
+    exec($cmd, $output);
+    
+    foreach ($output as $line) {
+        // 格式: printer-123 user 1024 Mon Dec 23 10:30:00 2024
+        if (preg_match('/^(\S+)-(\d+)\s+(\S+)\s+(\d+)\s+(.+)$/', $line, $m)) {
+            $printer = $m[1];
+            $jobId = $m[2];
+            $user = $m[3];
+            $size = intval($m[4]);
+            $timeStr = $m[5];
+            
+            // 获取任务详细信息
+            $jobInfo = getCupsJobInfo($printer . '-' . $jobId);
+            
+            $jobs[] = [
+                'id' => $jobId,
+                'printer' => $printer,
+                'user' => $user,
+                'size' => formatFileSizeForJobs($size),
+                'size_bytes' => $size,
+                'creation_time' => strtotime($timeStr),
+                'title' => $jobInfo['title'] ?? '',
+                'state' => $jobInfo['state'] ?? 'pending',
+                'pages' => $jobInfo['pages'] ?? ''
+            ];
+        }
+    }
+    
+    // 如果 lpstat -o 没有结果，尝试使用 lpq
+    if (empty($jobs)) {
+        $lpqCmd = 'LANG=C lpq -a 2>&1';
+        $lpqOutput = [];
+        exec($lpqCmd, $lpqOutput);
+        
+        foreach ($lpqOutput as $line) {
+            // 格式: Rank    Owner   Job     File(s)                         Total Size
+            if (preg_match('/^(\w+)\s+(\S+)\s+(\d+)\s+(.+?)\s+(\d+)\s*bytes/', $line, $m)) {
+                $jobs[] = [
+                    'id' => $m[3],
+                    'printer' => '',
+                    'user' => $m[2],
+                    'title' => trim($m[4]),
+                    'size' => formatFileSizeForJobs(intval($m[5])),
+                    'size_bytes' => intval($m[5]),
+                    'state' => strtolower($m[1]) === 'active' ? 'processing' : 'pending',
+                    'creation_time' => time(),
+                    'pages' => ''
+                ];
+            }
+        }
+    }
+    
+    return $jobs;
+}
+
+/**
+ * 获取单个打印任务的详细信息
+ */
+function getCupsJobInfo(string $jobId): array
+{
+    $info = [
+        'title' => '',
+        'state' => 'pending',
+        'pages' => ''
+    ];
+    
+    // 使用 lpstat -l 获取详细信息
+    $cmd = 'LANG=C lpstat -l ' . escapeshellarg($jobId) . ' 2>&1';
+    $output = [];
+    exec($cmd, $output);
+    $fullOutput = implode("\n", $output);
+    
+    // 解析任务标题
+    if (preg_match('/job-name[=:]\s*(.+)/i', $fullOutput, $m)) {
+        $info['title'] = trim($m[1]);
+    }
+    
+    // 解析任务状态
+    if (stripos($fullOutput, 'printing') !== false || stripos($fullOutput, 'processing') !== false) {
+        $info['state'] = 'processing';
+    } elseif (stripos($fullOutput, 'held') !== false) {
+        $info['state'] = 'held';
+    } elseif (stripos($fullOutput, 'stopped') !== false) {
+        $info['state'] = 'stopped';
+    } elseif (stripos($fullOutput, 'canceled') !== false || stripos($fullOutput, 'cancelled') !== false) {
+        $info['state'] = 'canceled';
+    } elseif (stripos($fullOutput, 'aborted') !== false) {
+        $info['state'] = 'aborted';
+    } elseif (stripos($fullOutput, 'completed') !== false) {
+        $info['state'] = 'completed';
+    }
+    
+    // 解析页数
+    if (preg_match('/pages[=:]\s*(\d+)/i', $fullOutput, $m)) {
+        $info['pages'] = $m[1];
+    }
+    
+    return $info;
+}
+
+/**
+ * 取消CUPS打印任务
+ * @param string $jobId 任务ID
+ * @param string $printerName 可选，打印机名称
+ * @return array 操作结果
+ */
+function cancelCupsJob(string $jobId, string $printerName = ''): array
+{
+    echo "[cancelCupsJob] 取消任务: $jobId, 打印机: $printerName\n";
+    
+    // 构建任务标识
+    $jobSpec = $jobId;
+    if (!empty($printerName) && strpos($jobId, '-') === false) {
+        $jobSpec = $printerName . '-' . $jobId;
+    }
+    
+    // 使用 cancel 命令取消任务
+    $cmd = 'cancel ' . escapeshellarg($jobSpec) . ' 2>&1';
+    $output = [];
+    $returnCode = 0;
+    exec($cmd, $output, $returnCode);
+    
+    echo "[cancelCupsJob] 命令: $cmd, 返回码: $returnCode, 输出: " . implode(' ', $output) . "\n";
+    
+    if ($returnCode === 0) {
+        return ['success' => true, 'message' => "任务 $jobId 已取消"];
+    } else {
+        // 尝试使用 lprm 命令
+        $cmd2 = 'lprm ' . escapeshellarg($jobId) . ' 2>&1';
+        $output2 = [];
+        exec($cmd2, $output2, $returnCode2);
+        
+        if ($returnCode2 === 0) {
+            return ['success' => true, 'message' => "任务 $jobId 已取消"];
+        }
+        
+        return ['success' => false, 'message' => '取消失败: ' . implode("\n", $output)];
+    }
+}
+
+/**
+ * 格式化文件大小（用于打印队列）
+ */
+function formatFileSizeForJobs(int $bytes): string
+{
+    if ($bytes < 1024) {
+        return $bytes . ' B';
+    } elseif ($bytes < 1048576) {
+        return round($bytes / 1024, 1) . ' KB';
+    } else {
+        return round($bytes / 1048576, 1) . ' MB';
+    }
+}
+
 function getDeviceStatus(): array
 {
     $status = [
@@ -218,6 +389,8 @@ function getDeviceId(): string
         }
     }
 
+    // 新设备生成30位ID（15字节 = 30个十六进制字符）
+    // 这样小程序码scene参数 "d=" + 30位 = 32字符，刚好不超限
     $randomBytes = random_bytes(15);
     $deviceId = bin2hex($randomBytes);
 
@@ -990,6 +1163,7 @@ function executePrint(string $printerName, string $fileContent, string $filename
             $useRotatedPdf = false;
             $landscapeOption = '';
             
+            // 横向打印处理
             if ($orientation === 'landscape') {
                 writeLog('INFO', "PDF需要横向打印，尝试转换PDF");
                 $rotatedPdf = rotatePdfForLandscape($tmpFile, $tmpDir);
@@ -998,6 +1172,7 @@ function executePrint(string $printerName, string $fileContent, string $filename
                     $useRotatedPdf = true;
                     writeLog('INFO', "PDF已转换为横向", ['rotatedPdf' => $rotatedPdf]);
                 } else {
+                    // 转换失败，使用打印机的横向选项作为备选
                     $landscapeOption = '-o landscape';
                     writeLog('WARNING', "PDF转换失败，使用打印机横向选项");
                 }
@@ -1020,6 +1195,7 @@ function executePrint(string $printerName, string $fileContent, string $filename
             exec($cmd, $output, $ret);
             $success = ($ret === 0);
             
+            // 清理旋转后的临时PDF
             if ($useRotatedPdf && file_exists($printPdf)) {
                 @unlink($printPdf);
             }
@@ -1027,10 +1203,12 @@ function executePrint(string $printerName, string $fileContent, string $filename
         } elseif (in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'bmp'])) {
             $printFile = $tmpFile;
             
+            // 横向打印：使用 ImageMagick 旋转图片90度
             if ($orientation === 'landscape') {
                 writeLog('INFO', "图片需要横向打印，尝试旋转图片");
                 $rotatedImg = $tmpDir . 'rotated_' . uniqid() . '.' . $ext;
                 
+                // 使用 convert 命令旋转图片（ImageMagick）
                 $rotateCmd = sprintf('convert %s -rotate 90 %s 2>&1',
                     escapeshellarg($tmpFile),
                     escapeshellarg($rotatedImg)
@@ -1055,6 +1233,7 @@ function executePrint(string $printerName, string $fileContent, string $filename
             exec($cmd, $output, $ret);
             $success = ($ret === 0);
             
+            // 清理旋转后的临时图片
             if ($printFile !== $tmpFile && file_exists($printFile)) {
                 @unlink($printFile);
             }
@@ -1076,6 +1255,7 @@ function executePrint(string $printerName, string $fileContent, string $filename
                 $useRotatedPdf = false;
                 $landscapeOption = '';
                 
+                // 横向打印处理
                 if ($orientation === 'landscape') {
                     writeLog('INFO', "文档需要横向打印，尝试转换PDF");
                     $rotatedPdf = rotatePdfForLandscape($pdf, $tmpDir);
@@ -1084,11 +1264,13 @@ function executePrint(string $printerName, string $fileContent, string $filename
                         $useRotatedPdf = true;
                         writeLog('INFO', "PDF已转换为横向", ['rotatedPdf' => $rotatedPdf]);
                     } else {
+                        // 转换失败，使用打印机的横向选项作为备选
                         $landscapeOption = '-o landscape';
                         writeLog('WARNING', "PDF转换失败，使用打印机横向选项");
                     }
                 }
                 
+                // 页码范围选项
                 $pageOption = '';
                 $pFrom = intval($pageFrom);
                 $pTo = intval($pageTo);
@@ -1098,6 +1280,7 @@ function executePrint(string $printerName, string $fileContent, string $filename
                     writeLog('INFO', "文档选页打印", ['pageOption' => $pageOption]);
                 }
                 
+                // 构建打印命令
                 $cmd = sprintf('lp -d %s -n %d%s %s -o media=A4 %s -o fit-to-page %s 2>&1',
                     escapeshellarg($printerName),
                     $copies,
@@ -1110,6 +1293,7 @@ function executePrint(string $printerName, string $fileContent, string $filename
                 exec($cmd, $output, $ret);
                 $success = ($ret === 0);
                 
+                // 清理临时文件
                 @unlink($pdf);
                 if ($useRotatedPdf && file_exists($printPdf)) {
                     @unlink($printPdf);
@@ -1149,6 +1333,7 @@ function buildLpOptions($colorMode, $orientation): string
 {
     $options = [];
     
+    // 确保参数是字符串
     $colorMode = strval($colorMode ?: 'color');
     
     if ($colorMode === 'gray') {
@@ -1156,17 +1341,27 @@ function buildLpOptions($colorMode, $orientation): string
         $options[] = '-o print-color-mode=monochrome';
     }
     
+    // 注意：不使用CUPS的-o landscape选项，因为很多打印机不支持或会产生镜像
+    // 横向打印通过旋转PDF/图片内容本身来实现
+    
     return implode(' ', $options);
 }
 
+/**
+ * 将PDF转换为横向打印格式
+ * 不旋转内容，而是将纵向页面内容缩放到横向页面上
+ */
 function rotatePdfForLandscape($pdfFile, $tmpDir): string
 {
     $pdfFile = strval($pdfFile);
     $tmpDir = strval($tmpDir);
     $rotatedPdf = $tmpDir . uniqid('landscape_') . '.pdf';
     
+    // 方法1: 使用 pdfjam 将内容放到横向页面（推荐）
+    // --landscape 设置输出为横向，--fitpaper 自动适应
     exec('which pdfjam 2>/dev/null', $whichPdfjam, $whichPdfjamRet);
     if ($whichPdfjamRet === 0) {
+        // 使用 --angle 90 旋转内容，同时设置横向页面
         $pdfjamCmd = sprintf('pdfjam --angle 90 --fitpaper true --rotateoversize true --outfile %s %s 2>&1',
             escapeshellarg($rotatedPdf),
             escapeshellarg($pdfFile)
@@ -1180,8 +1375,10 @@ function rotatePdfForLandscape($pdfFile, $tmpDir): string
         writeLog('WARNING', "pdfjam转换失败", ['output' => implode('; ', $pdfjamOutput)]);
     }
     
+    // 方法2: 使用 ps2pdf 通过PostScript转换
     exec('which ps2pdf 2>/dev/null', $whichPs2pdf, $whichPs2pdfRet);
     if ($whichPs2pdfRet === 0) {
+        // 先转为PS，设置横向，再转回PDF
         $tmpPs = $tmpDir . uniqid('tmp_') . '.ps';
         $pdf2psCmd = sprintf('pdf2ps %s %s 2>&1', escapeshellarg($pdfFile), escapeshellarg($tmpPs));
         exec($pdf2psCmd, $pdf2psOutput, $pdf2psRet);
@@ -1202,6 +1399,8 @@ function rotatePdfForLandscape($pdfFile, $tmpDir): string
         writeLog('WARNING', "ps2pdf转换失败");
     }
     
+    // 方法3: 直接返回原文件，让打印机处理横向
+    // 某些打印机可以正确处理 -o landscape 选项
     writeLog('WARNING', "未安装PDF转换工具(pdfjam/ps2pdf)，将尝试使用打印机横向选项");
     return '';
 }
@@ -1723,6 +1922,7 @@ class PrinterClient
                 $lines = intval($data['lines'] ?? 200);
                 $date = $data['date'] ?? '';
                 
+                // 不记录获取日志请求，避免日志中出现大量重复信息
                 $logResult = getLogContent($lines, $date);
                 $this->send([
                     'action' => 'logs_result',
@@ -1770,6 +1970,44 @@ class PrinterClient
                     'cleaned' => $cleanResult['cleaned'],
                     'errors' => $cleanResult['errors']
                 ]);
+                break;
+                
+            case 'get_cups_jobs':
+                $requestId = $data['request_id'] ?? '';
+                $printerName = $data['printer_name'] ?? '';
+                echo "[get_cups_jobs] 获取打印队列, 打印机: $printerName\n";
+                
+                $jobs = getCupsJobs($printerName);
+                $this->send([
+                    'action' => 'cups_jobs_result',
+                    'request_id' => $requestId,
+                    'success' => true,
+                    'jobs' => $jobs
+                ]);
+                break;
+                
+            case 'cancel_cups_job':
+                $requestId = $data['request_id'] ?? '';
+                $jobId = $data['job_id'] ?? '';
+                $printerName = $data['printer_name'] ?? '';
+                echo "[cancel_cups_job] 取消任务: $jobId\n";
+                
+                if (empty($jobId)) {
+                    $this->send([
+                        'action' => 'cancel_job_result',
+                        'request_id' => $requestId,
+                        'success' => false,
+                        'message' => '任务ID不能为空'
+                    ]);
+                } else {
+                    $result = cancelCupsJob($jobId, $printerName);
+                    $this->send([
+                        'action' => 'cancel_job_result',
+                        'request_id' => $requestId,
+                        'success' => $result['success'],
+                        'message' => $result['message']
+                    ]);
+                }
                 break;
         }
     }
