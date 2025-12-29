@@ -67,13 +67,6 @@ update_system() {
     print_msg "系统包列表已更新"
 }
 
-# 清理apt缓存释放存储空间
-cleanup_apt_cache() {
-    print_msg "清理apt缓存释放存储空间..."
-    apt-get clean
-    rm -rf /var/lib/apt/lists/*
-}
-
 install_base_deps() {
     print_step "安装基础依赖"
     
@@ -82,12 +75,11 @@ install_base_deps() {
     for pkg in $PACKAGES; do
         if ! command -v $pkg &> /dev/null; then
             print_msg "安装 $pkg..."
-            apt-get install -y --no-install-recommends $pkg
+            apt-get install -y $pkg
         else
             print_msg "$pkg 已安装"
         fi
     done
-    cleanup_apt_cache
 }
 
 install_php() {
@@ -120,16 +112,15 @@ install_php() {
     if [ "$NEED_INSTALL" = true ]; then
         if ! command -v php &> /dev/null; then
             print_msg "安装 PHP..."
-            apt-get install -y --no-install-recommends php php-cli 2>/dev/null || apt-get install -y --no-install-recommends php7.4 php7.4-cli 2>/dev/null
+            apt-get install -y php php-cli 2>/dev/null || apt-get install -y php7.4 php7.4-cli 2>/dev/null
         fi
         print_msg "安装 PHP 扩展..."
         for ext in $REQUIRED_EXTS; do
             if ! php -m | grep -qi "^$ext$"; then
                 print_msg "  安装 php-$ext..."
-                apt-get install -y --no-install-recommends php-$ext 2>/dev/null || apt-get install -y --no-install-recommends php7.4-$ext 2>/dev/null || true
+                apt-get install -y php-$ext 2>/dev/null || apt-get install -y php7.4-$ext 2>/dev/null || true
             fi
         done
-        cleanup_apt_cache
     fi
     print_msg "验证 PHP 扩展..."
     for ext in $REQUIRED_EXTS; do
@@ -146,9 +137,8 @@ install_cups() {
     if command -v lpstat &> /dev/null; then
         print_msg "CUPS 已安装"
     else
-        print_msg "安装 CUPS..."
+        print_msg "安装 CUPS (精简版)..."
         apt-get install -y --no-install-recommends cups cups-client cups-bsd
-        cleanup_apt_cache
     fi
     print_msg "启动 CUPS 服务..."
     systemctl enable cups
@@ -170,100 +160,68 @@ install_cups() {
 
 install_printer_drivers() {
     print_step "安装打印机驱动"
+    
+    # 安装通用驱动（使用 --no-install-recommends 减少依赖）
     print_msg "安装通用打印机驱动..."
-    apt-get install -y --no-install-recommends printer-driver-gutenprint 2>/dev/null || true
-    cleanup_apt_cache
-    apt-get update -y
+    apt-get install -y --no-install-recommends printer-driver-gutenprint 2>/dev/null || print_warn "Gutenprint驱动安装跳过"
     
     print_msg "安装品牌驱动..."
-    apt-get install -y --no-install-recommends hplip-minimal 2>/dev/null || \
     apt-get install -y --no-install-recommends hplip 2>/dev/null || print_warn "HP驱动安装跳过"
-    cleanup_apt_cache
-    apt-get update -y
-    
     apt-get install -y --no-install-recommends printer-driver-splix 2>/dev/null || print_warn "Samsung/Xerox驱动安装跳过"
-    print_msg "安装联想/兄弟打印机驱动..."
     apt-get install -y --no-install-recommends printer-driver-brlaser 2>/dev/null || print_warn "Lenovo/Brother驱动安装跳过"
     apt-get install -y --no-install-recommends printer-driver-escpr 2>/dev/null || print_warn "Epson驱动安装跳过"
-    cleanup_apt_cache
-    apt-get update -y
     
+    # Foomatic 精简安装
     print_msg "安装Foomatic驱动引擎..."
     apt-get install -y --no-install-recommends foomatic-db-engine 2>/dev/null || print_warn "Foomatic引擎安装跳过"
     apt-get install -y --no-install-recommends foomatic-db-compressed-ppds 2>/dev/null || true
-    cleanup_apt_cache
-    apt-get update -y
     
-    apt-get install -y --no-install-recommends printer-driver-postscript-hp 2>/dev/null || true
     print_msg "打印机驱动安装完成"
-    cleanup_apt_cache
 }
 
 install_libreoffice() {
-    print_step "安装 LibreOffice (文档转换)"
+    print_step "安装 LibreOffice"
     if command -v libreoffice &> /dev/null; then
         LO_VERSION=$(libreoffice --version | head -n 1)
         print_msg "LibreOffice 已安装: $LO_VERSION"
     else
-        print_msg "安装 LibreOffice (这可能需要几分钟)..."
-        # 使用 --no-install-recommends 减少安装体积
-        apt-get install -y --no-install-recommends libreoffice-writer-nogui libreoffice-calc-nogui 2>/dev/null || \
-        apt-get install -y --no-install-recommends libreoffice-writer libreoffice-calc 2>/dev/null || \
-        apt-get install -y libreoffice-writer libreoffice-calc
-        cleanup_apt_cache
+        print_msg "安装 LibreOffice (Writer + Calc + Impress)..."
+        # 安装完整的文档转换支持，但不安装推荐包
+        if [ "$TOTAL_MEM" -lt 512 ]; then
+            print_warn "内存较小，安装 nogui 版本..."
+            apt-get install -y --no-install-recommends libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui 2>/dev/null || \
+            apt-get install -y --no-install-recommends libreoffice-writer libreoffice-calc libreoffice-impress
+        else
+            apt-get install -y --no-install-recommends libreoffice-writer libreoffice-calc libreoffice-impress
+        fi
     fi
     mkdir -p /tmp/.libreoffice
     chmod 777 /tmp/.libreoffice
 }
 
 install_print_tools() {
-    print_step "安装打印增强工具"
-    print_msg "安装 Ghostscript (PDF/PS处理)..."
+    print_step "安装打印工具"
+    
+    print_msg "安装 Ghostscript (PDF处理)..."
     apt-get install -y --no-install-recommends ghostscript 2>/dev/null || print_warn "ghostscript 安装跳过"
-    print_msg "安装 qpdf (PDF处理工具)..."
+    
+    print_msg "安装 qpdf (PDF处理)..."
     apt-get install -y --no-install-recommends qpdf 2>/dev/null || print_warn "qpdf 安装跳过"
-    print_msg "安装 ImageMagick (图片处理工具)..."
+    
+    print_msg "安装 ImageMagick (图片处理)..."
     apt-get install -y --no-install-recommends imagemagick 2>/dev/null || print_warn "ImageMagick 安装跳过"
-    cleanup_apt_cache
-    apt-get update -y
     
-    print_msg "安装 pdfjam (PDF页面处理，横向打印必需)..."
+    print_msg "安装 pdfjam (横向打印支持)..."
     apt-get install -y --no-install-recommends texlive-extra-utils 2>/dev/null || print_warn "pdfjam 安装跳过"
-    cleanup_apt_cache
-    apt-get update -y
-    
-    print_msg "安装 pdftk (PDF工具包)..."
-    apt-get install -y --no-install-recommends pdftk-java 2>/dev/null || apt-get install -y --no-install-recommends pdftk 2>/dev/null || print_warn "pdftk 安装跳过（可选）"
-    cleanup_apt_cache
     
     echo ""
-    print_msg "打印增强工具安装状态:"
-    if command -v gs &> /dev/null; then
-        print_msg "  ✓ Ghostscript $(gs --version 2>&1)"
-    else
-        print_warn "  ✗ Ghostscript 未安装"
-    fi
-    if command -v qpdf &> /dev/null; then
-        print_msg "  ✓ qpdf $(qpdf --version 2>&1 | head -1)"
-    else
-        print_warn "  ✗ qpdf 未安装"
-    fi
-    if command -v convert &> /dev/null; then
-        print_msg "  ✓ ImageMagick $(convert --version 2>&1 | head -1 | cut -d' ' -f3)"
-    else
-        print_warn "  ✗ ImageMagick 未安装"
-    fi
-    if command -v pdfjam &> /dev/null; then
-        print_msg "  ✓ pdfjam 已安装（横向打印支持）"
-    else
-        print_warn "  ✗ pdfjam 未安装（横向打印可能使用备选方案）"
-    fi
-    if command -v pdftk &> /dev/null; then
-        print_msg "  ✓ pdftk 已安装"
-    else
-        print_msg "  - pdftk 未安装（可选）"
-    fi
-    print_msg "打印增强工具安装完成"
+    print_msg "打印工具安装状态:"
+    command -v gs &> /dev/null && print_msg "  ✓ Ghostscript" || print_warn "  ✗ Ghostscript"
+    command -v qpdf &> /dev/null && print_msg "  ✓ qpdf" || print_warn "  ✗ qpdf"
+    command -v convert &> /dev/null && print_msg "  ✓ ImageMagick" || print_warn "  ✗ ImageMagick"
+    command -v pdfjam &> /dev/null && print_msg "  ✓ pdfjam" || print_warn "  ✗ pdfjam"
+    
+    print_msg "打印工具安装完成"
 }
 
 download_files() {
@@ -491,20 +449,27 @@ start_service() {
     fi
 }
 
-show_summary() {
-    print_step "安装完成"
-    
-    # 最终清理释放存储空间
-    print_msg "执行最终清理..."
+cleanup_cache() {
+    print_step "清理缓存节省空间"
+    print_msg "清理 apt 缓存..."
     apt-get clean
+    apt-get autoclean
     apt-get autoremove -y 2>/dev/null || true
     rm -rf /var/lib/apt/lists/*
+    
+    # 清理临时文件
     rm -rf /tmp/* 2>/dev/null || true
     rm -rf /var/tmp/* 2>/dev/null || true
     
     # 清理日志
-    journalctl --vacuum-time=1d 2>/dev/null || true
+    find /var/log -type f -name "*.gz" -delete 2>/dev/null || true
+    find /var/log -type f -name "*.1" -delete 2>/dev/null || true
     
+    print_msg "缓存清理完成"
+}
+
+show_summary() {
+    print_step "安装完成"
     echo ""
     echo "============================================"
     echo "  WebSocket 打印客户端安装完成!"
@@ -523,12 +488,6 @@ show_summary() {
     echo ""
     echo "CUPS管理: http://$(hostname -I | awk '{print $1}'):631"
     echo ""
-    
-    # 显示存储空间
-    print_msg "存储空间:"
-    df -h / | tail -1 | awk '{print "  已用: "$3" / "$2" ("$5" 使用率)"}'
-    echo ""
-    
     echo "当前服务状态:"
     systemctl status $SERVICE_NAME --no-pager -l | head -10
 }
@@ -636,6 +595,7 @@ full_install() {
     configure_server
     configure_device_id
     create_service
+    cleanup_cache
     detect_printers
     echo ""
     read -p "是否现在添加打印机? [y/N]: " ADD_PRINTER
