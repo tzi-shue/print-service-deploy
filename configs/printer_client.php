@@ -1,6 +1,6 @@
 #!/usr/bin/env php
 <?php
-define('CLIENT_VERSION', '1.0.8');
+define('CLIENT_VERSION', '1.1.0');
 define('LOG_DIR', '/var/log/printer-client/');
 define('LOG_RETENTION_DAYS', 2);
 define('PRINT_TEMP_DIR', '/tmp/print_jobs/');
@@ -16,6 +16,7 @@ $_H = base64_decode('eGlucHJpbnQuenlzaGFyZS50b3A=');
 $WS_SERVER = $_CFG['s'] ?? "ws://{$_H}:8089";
 $RECONNECT_INTERVAL = $_CFG['r'] ?? 5;
 $HEARTBEAT_INTERVAL = $_CFG['h'] ?? 30;
+$MAX_RECONNECT_INTERVAL = 60; 
 $LAST_TEMP_CLEAN = 0;
 
 function initLogDir(): void
@@ -147,9 +148,11 @@ function cleanTempPrintFiles(): array
     
     $tmpPatterns = [
         '/tmp/print_*.txt',
+        '/tmp/print_*.pdf',
         '/tmp/test_print_*.txt',
         '/tmp/*.ppd',
-        '/tmp/printer_client_*.php'
+        '/tmp/printer_client_*.php',
+        '/tmp/lu*',  
     ];
     
     foreach ($tmpPatterns as $pattern) {
@@ -167,6 +170,55 @@ function cleanTempPrintFiles(): array
         }
     }
     
+    $loTmpDir = '/tmp/.libreoffice';
+    if (is_dir($loTmpDir)) {
+        $cutoffTime = time() - 600; 
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($loTmpDir, RecursiveDirectoryIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ($iterator as $file) {
+            if ($file->isFile() && $file->getMTime() < $cutoffTime) {
+                if (@unlink($file->getPathname())) {
+                    $cleaned++;
+                }
+            }
+        }
+    }
+    
+    $cupsSpoolDir = '/var/spool/cups';
+    if (is_dir($cupsSpoolDir) && is_readable($cupsSpoolDir)) {
+        $files = glob($cupsSpoolDir . '/d*');
+        $cutoffTime = time() - 3600; 
+        foreach ($files as $file) {
+            if (is_file($file) && filemtime($file) < $cutoffTime) {
+                if (@unlink($file)) {
+                    $cleaned++;
+                }
+            }
+        }
+    }
+    
+    $cupsLogDir = '/var/log/cups';
+    if (is_dir($cupsLogDir)) {
+        $logPatterns = [
+            $cupsLogDir . '/access_log.*',
+            $cupsLogDir . '/error_log.*',
+            $cupsLogDir . '/page_log.*',
+        ];
+        $cutoffTime = time() - (2 * 86400);
+        foreach ($logPatterns as $pattern) {
+            $files = glob($pattern);
+            foreach ($files as $file) {
+                if (is_file($file) && filemtime($file) < $cutoffTime) {
+                    if (@unlink($file)) {
+                        $cleaned++;
+                    }
+                }
+            }
+        }
+    }
+    
     if ($cleaned > 0) {
         writeLog('INFO', "清理临时文件: {$cleaned} 个", ['errors' => $errors]);
     }
@@ -174,16 +226,11 @@ function cleanTempPrintFiles(): array
     return ['cleaned' => $cleaned, 'errors' => $errors];
 }
 
-/**
- * 获取CUPS打印队列
- * @param string $printerName 可选，指定打印机名称
- * @return array 打印任务列表
- */
+
 function getCupsJobs(string $printerName = ''): array
 {
     $jobs = [];
     
-    // 使用 lpstat -o 获取所有打印任务
     $cmd = 'LANG=C lpstat -o';
     if (!empty($printerName)) {
         $cmd .= ' ' . escapeshellarg($printerName);
@@ -194,7 +241,6 @@ function getCupsJobs(string $printerName = ''): array
     exec($cmd, $output);
     
     foreach ($output as $line) {
-        // 格式: printer-123 user 1024 Mon Dec 23 10:30:00 2024
         if (preg_match('/^(\S+)-(\d+)\s+(\S+)\s+(\d+)\s+(.+)$/', $line, $m)) {
             $printer = $m[1];
             $jobId = $m[2];
@@ -202,7 +248,6 @@ function getCupsJobs(string $printerName = ''): array
             $size = intval($m[4]);
             $timeStr = $m[5];
             
-            // 获取任务详细信息
             $jobInfo = getCupsJobInfo($printer . '-' . $jobId);
             
             $jobs[] = [
@@ -219,14 +264,12 @@ function getCupsJobs(string $printerName = ''): array
         }
     }
     
-    // 如果 lpstat -o 没有结果，尝试使用 lpq
     if (empty($jobs)) {
         $lpqCmd = 'LANG=C lpq -a 2>&1';
         $lpqOutput = [];
         exec($lpqCmd, $lpqOutput);
         
         foreach ($lpqOutput as $line) {
-            // 格式: Rank    Owner   Job     File(s)                         Total Size
             if (preg_match('/^(\w+)\s+(\S+)\s+(\d+)\s+(.+?)\s+(\d+)\s*bytes/', $line, $m)) {
                 $jobs[] = [
                     'id' => $m[3],
@@ -246,9 +289,7 @@ function getCupsJobs(string $printerName = ''): array
     return $jobs;
 }
 
-/**
- * 获取单个打印任务的详细信息
- */
+
 function getCupsJobInfo(string $jobId): array
 {
     $info = [
@@ -257,18 +298,15 @@ function getCupsJobInfo(string $jobId): array
         'pages' => ''
     ];
     
-    // 使用 lpstat -l 获取详细信息
     $cmd = 'LANG=C lpstat -l ' . escapeshellarg($jobId) . ' 2>&1';
     $output = [];
     exec($cmd, $output);
     $fullOutput = implode("\n", $output);
     
-    // 解析任务标题
     if (preg_match('/job-name[=:]\s*(.+)/i', $fullOutput, $m)) {
         $info['title'] = trim($m[1]);
     }
     
-    // 解析任务状态
     if (stripos($fullOutput, 'printing') !== false || stripos($fullOutput, 'processing') !== false) {
         $info['state'] = 'processing';
     } elseif (stripos($fullOutput, 'held') !== false) {
@@ -283,7 +321,6 @@ function getCupsJobInfo(string $jobId): array
         $info['state'] = 'completed';
     }
     
-    // 解析页数
     if (preg_match('/pages[=:]\s*(\d+)/i', $fullOutput, $m)) {
         $info['pages'] = $m[1];
     }
@@ -301,13 +338,11 @@ function cancelCupsJob(string $jobId, string $printerName = ''): array
 {
     echo "[cancelCupsJob] 取消任务: $jobId, 打印机: $printerName\n";
     
-    // 构建任务标识
     $jobSpec = $jobId;
     if (!empty($printerName) && strpos($jobId, '-') === false) {
         $jobSpec = $printerName . '-' . $jobId;
     }
     
-    // 使用 cancel 命令取消任务
     $cmd = 'cancel ' . escapeshellarg($jobSpec) . ' 2>&1';
     $output = [];
     $returnCode = 0;
@@ -318,7 +353,6 @@ function cancelCupsJob(string $jobId, string $printerName = ''): array
     if ($returnCode === 0) {
         return ['success' => true, 'message' => "任务 $jobId 已取消"];
     } else {
-        // 尝试使用 lprm 命令
         $cmd2 = 'lprm ' . escapeshellarg($jobId) . ' 2>&1';
         $output2 = [];
         exec($cmd2, $output2, $returnCode2);
@@ -331,9 +365,6 @@ function cancelCupsJob(string $jobId, string $printerName = ''): array
     }
 }
 
-/**
- * 格式化文件大小（用于打印队列）
- */
 function formatFileSizeForJobs(int $bytes): string
 {
     if ($bytes < 1024) {
@@ -383,14 +414,11 @@ function getDeviceId(): string
 
     if (file_exists($idFile)) {
         $id = trim(@file_get_contents($idFile) ?: '');
-        // 兼容30位（新）和32位（老）设备ID
         if ($id !== '' && preg_match('/^[0-9a-fA-F]{30,32}$/', $id)) {
             return strtolower($id);
         }
     }
 
-    // 新设备生成30位ID（15字节 = 30个十六进制字符）
-    // 这样小程序码scene参数 "d=" + 30位 = 32字符，刚好不超限
     $randomBytes = random_bytes(15);
     $deviceId = bin2hex($randomBytes);
 
@@ -902,8 +930,14 @@ function upgradeClient(string $downloadUrl): array
     echo "[upgradeClient] 开始升级，下载地址: $downloadUrl\n";
     
     $currentScript = realpath(__FILE__);
-    $backupScript = $currentScript . '.backup.' . date('YmdHis');
+    $backupScript = $currentScript . '.backup';
     $tempScript = '/tmp/printer_client_new.php';
+    
+    $oldBackups = glob($currentScript . '.backup.*');
+    foreach ($oldBackups as $oldBackup) {
+        @unlink($oldBackup);
+        echo "[upgradeClient] 删除旧备份: $oldBackup\n";
+    }
     
     $ch = curl_init();
     curl_setopt_array($ch, [
@@ -936,6 +970,10 @@ function upgradeClient(string $downloadUrl): array
         return ['success' => false, 'message' => 'PHP语法错误: ' . implode("\n", $syntaxOutput)];
     }
     
+    if (file_exists($backupScript)) {
+        @unlink($backupScript);
+    }
+    
     echo "[upgradeClient] 备份当前文件: {$backupScript}\n";
     if (!copy($currentScript, $backupScript)) {
         @unlink($tempScript);
@@ -966,6 +1004,22 @@ function upgradeClient(string $downloadUrl): array
     echo "[upgradeClient] 重启命令已发送: {$cmd}\n";
     
     return ['success' => true, 'message' => "升级成功，新版本: {$newVersion}，服务将在3秒后重启"];
+}
+
+
+function rebootDevice(bool $rebootSystem = false): array
+{
+    if ($rebootSystem) {
+        writeLog('WARN', '收到远程重启系统命令，系统将在5秒后重启');
+        $cmd = "(sleep 5 && reboot) > /dev/null 2>&1 &";
+        shell_exec($cmd);
+        return ['success' => true, 'message' => '系统将在5秒后重启'];
+    } else {
+        writeLog('INFO', '收到远程重启服务命令');
+        $cmd = "(sleep 2 && systemctl restart websocket-printer) > /dev/null 2>&1 &";
+        shell_exec($cmd);
+        return ['success' => true, 'message' => '打印服务将在2秒后重启'];
+    }
 }
 
 function checkPrinterAvailable(string $printerName): bool
@@ -1163,7 +1217,6 @@ function executePrint(string $printerName, string $fileContent, string $filename
             $useRotatedPdf = false;
             $landscapeOption = '';
             
-            // 横向打印处理
             if ($orientation === 'landscape') {
                 writeLog('INFO', "PDF需要横向打印，尝试转换PDF");
                 $rotatedPdf = rotatePdfForLandscape($tmpFile, $tmpDir);
@@ -1172,7 +1225,6 @@ function executePrint(string $printerName, string $fileContent, string $filename
                     $useRotatedPdf = true;
                     writeLog('INFO', "PDF已转换为横向", ['rotatedPdf' => $rotatedPdf]);
                 } else {
-                    // 转换失败，使用打印机的横向选项作为备选
                     $landscapeOption = '-o landscape';
                     writeLog('WARNING', "PDF转换失败，使用打印机横向选项");
                 }
@@ -1195,7 +1247,6 @@ function executePrint(string $printerName, string $fileContent, string $filename
             exec($cmd, $output, $ret);
             $success = ($ret === 0);
             
-            // 清理旋转后的临时PDF
             if ($useRotatedPdf && file_exists($printPdf)) {
                 @unlink($printPdf);
             }
@@ -1203,12 +1254,10 @@ function executePrint(string $printerName, string $fileContent, string $filename
         } elseif (in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'bmp'])) {
             $printFile = $tmpFile;
             
-            // 横向打印：使用 ImageMagick 旋转图片90度
             if ($orientation === 'landscape') {
                 writeLog('INFO', "图片需要横向打印，尝试旋转图片");
                 $rotatedImg = $tmpDir . 'rotated_' . uniqid() . '.' . $ext;
                 
-                // 使用 convert 命令旋转图片（ImageMagick）
                 $rotateCmd = sprintf('convert %s -rotate 90 %s 2>&1',
                     escapeshellarg($tmpFile),
                     escapeshellarg($rotatedImg)
@@ -1233,7 +1282,6 @@ function executePrint(string $printerName, string $fileContent, string $filename
             exec($cmd, $output, $ret);
             $success = ($ret === 0);
             
-            // 清理旋转后的临时图片
             if ($printFile !== $tmpFile && file_exists($printFile)) {
                 @unlink($printFile);
             }
@@ -1255,7 +1303,6 @@ function executePrint(string $printerName, string $fileContent, string $filename
                 $useRotatedPdf = false;
                 $landscapeOption = '';
                 
-                // 横向打印处理
                 if ($orientation === 'landscape') {
                     writeLog('INFO', "文档需要横向打印，尝试转换PDF");
                     $rotatedPdf = rotatePdfForLandscape($pdf, $tmpDir);
@@ -1264,13 +1311,11 @@ function executePrint(string $printerName, string $fileContent, string $filename
                         $useRotatedPdf = true;
                         writeLog('INFO', "PDF已转换为横向", ['rotatedPdf' => $rotatedPdf]);
                     } else {
-                        // 转换失败，使用打印机的横向选项作为备选
                         $landscapeOption = '-o landscape';
                         writeLog('WARNING', "PDF转换失败，使用打印机横向选项");
                     }
                 }
                 
-                // 页码范围选项
                 $pageOption = '';
                 $pFrom = intval($pageFrom);
                 $pTo = intval($pageTo);
@@ -1280,7 +1325,6 @@ function executePrint(string $printerName, string $fileContent, string $filename
                     writeLog('INFO', "文档选页打印", ['pageOption' => $pageOption]);
                 }
                 
-                // 构建打印命令
                 $cmd = sprintf('lp -d %s -n %d%s %s -o media=A4 %s -o fit-to-page %s 2>&1',
                     escapeshellarg($printerName),
                     $copies,
@@ -1293,7 +1337,6 @@ function executePrint(string $printerName, string $fileContent, string $filename
                 exec($cmd, $output, $ret);
                 $success = ($ret === 0);
                 
-                // 清理临时文件
                 @unlink($pdf);
                 if ($useRotatedPdf && file_exists($printPdf)) {
                     @unlink($printPdf);
@@ -1333,7 +1376,6 @@ function buildLpOptions($colorMode, $orientation): string
 {
     $options = [];
     
-    // 确保参数是字符串
     $colorMode = strval($colorMode ?: 'color');
     
     if ($colorMode === 'gray') {
@@ -1341,27 +1383,19 @@ function buildLpOptions($colorMode, $orientation): string
         $options[] = '-o print-color-mode=monochrome';
     }
     
-    // 注意：不使用CUPS的-o landscape选项，因为很多打印机不支持或会产生镜像
-    // 横向打印通过旋转PDF/图片内容本身来实现
-    
+
     return implode(' ', $options);
 }
 
-/**
- * 将PDF转换为横向打印格式
- * 不旋转内容，而是将纵向页面内容缩放到横向页面上
- */
+
 function rotatePdfForLandscape($pdfFile, $tmpDir): string
 {
     $pdfFile = strval($pdfFile);
     $tmpDir = strval($tmpDir);
     $rotatedPdf = $tmpDir . uniqid('landscape_') . '.pdf';
     
-    // 方法1: 使用 pdfjam 将内容放到横向页面（推荐）
-    // --landscape 设置输出为横向，--fitpaper 自动适应
     exec('which pdfjam 2>/dev/null', $whichPdfjam, $whichPdfjamRet);
     if ($whichPdfjamRet === 0) {
-        // 使用 --angle 90 旋转内容，同时设置横向页面
         $pdfjamCmd = sprintf('pdfjam --angle 90 --fitpaper true --rotateoversize true --outfile %s %s 2>&1',
             escapeshellarg($rotatedPdf),
             escapeshellarg($pdfFile)
@@ -1375,10 +1409,8 @@ function rotatePdfForLandscape($pdfFile, $tmpDir): string
         writeLog('WARNING', "pdfjam转换失败", ['output' => implode('; ', $pdfjamOutput)]);
     }
     
-    // 方法2: 使用 ps2pdf 通过PostScript转换
     exec('which ps2pdf 2>/dev/null', $whichPs2pdf, $whichPs2pdfRet);
     if ($whichPs2pdfRet === 0) {
-        // 先转为PS，设置横向，再转回PDF
         $tmpPs = $tmpDir . uniqid('tmp_') . '.ps';
         $pdf2psCmd = sprintf('pdf2ps %s %s 2>&1', escapeshellarg($pdfFile), escapeshellarg($tmpPs));
         exec($pdf2psCmd, $pdf2psOutput, $pdf2psRet);
@@ -1399,8 +1431,6 @@ function rotatePdfForLandscape($pdfFile, $tmpDir): string
         writeLog('WARNING', "ps2pdf转换失败");
     }
     
-    // 方法3: 直接返回原文件，让打印机处理横向
-    // 某些打印机可以正确处理 -o landscape 选项
     writeLog('WARNING', "未安装PDF转换工具(pdfjam/ps2pdf)，将尝试使用打印机横向选项");
     return '';
 }
@@ -1428,6 +1458,8 @@ class PrinterClient
         $port = $urlParts['port'] ?? 80;
         $path = $urlParts['path'] ?? '/';
         
+        writeLog('INFO', "正在连接服务器...");
+        
         $this->socket = @stream_socket_client(
             "tcp://{$host}:{$port}",
             $errno,
@@ -1436,7 +1468,7 @@ class PrinterClient
         );
         
         if (!$this->socket) {
-            echo "连接失败: $errstr ($errno)\n";
+            writeLog('ERROR', "连接失败", ['errno' => $errno]);
             return false;
         }
         
@@ -1457,14 +1489,14 @@ class PrinterClient
         }
         
         if (strpos($response, '101') === false) {
-            echo "WebSocket 握手失败\n";
+            writeLog('ERROR', "WebSocket握手失败");
             fclose($this->socket);
             return false;
         }
         
         stream_set_blocking($this->socket, false);
         $this->connected = true;
-        echo "已连接到服务器\n";
+        writeLog('INFO', "已连接到服务器");
         
         $this->register();
         
@@ -1655,7 +1687,14 @@ class PrinterClient
         }
         
         $action = $data['action'] ?? 'unknown';
-        echo "收到命令: " . $action . "\n";
+        
+        $silentActions = ['heartbeat_ack', 'get_logs', 'get_log_dates', 'get_status', 'clean_temp'];
+        if (!in_array($action, $silentActions)) {
+            echo "收到命令: " . $action . "\n";
+            if ($action === 'unknown') {
+                echo "[DEBUG] 原始消息: " . substr($message, 0, 500) . "\n";
+            }
+        }
         
         if ($action === 'print') {
             echo "[handleMessage] print命令字段: " . implode(', ', array_keys($data)) . "\n";
@@ -1922,7 +1961,6 @@ class PrinterClient
                 $lines = intval($data['lines'] ?? 200);
                 $date = $data['date'] ?? '';
                 
-                // 不记录获取日志请求，避免日志中出现大量重复信息
                 $logResult = getLogContent($lines, $date);
                 $this->send([
                     'action' => 'logs_result',
@@ -2009,20 +2047,78 @@ class PrinterClient
                     ]);
                 }
                 break;
+                
+            case 'reboot':
+                $requestId = $data['request_id'] ?? '';
+                $rebootSystem = ($data['reboot_system'] ?? false) === true;
+                echo "========================================\n";
+                echo "[reboot] 收到远程重启命令, 重启系统: " . ($rebootSystem ? '是' : '否') . "\n";
+                echo "========================================\n";
+                
+                writeLog('WARN', "收到远程重启命令", ['reboot_system' => $rebootSystem]);
+                
+                $result = rebootDevice($rebootSystem);
+                echo "[reboot] 执行结果: " . ($result['success'] ? '成功' : '失败') . " - " . $result['message'] . "\n";
+                
+                $this->send([
+                    'action' => 'reboot_result',
+                    'request_id' => $requestId,
+                    'success' => $result['success'],
+                    'message' => $result['message']
+                ]);
+                break;
+                
+            case 'restart_service':
+                $requestId = $data['request_id'] ?? '';
+                echo "========================================\n";
+                echo "[restart_service] 收到远程重启服务命令!\n";
+                echo "========================================\n";
+                
+                writeLog('INFO', "收到远程重启服务命令");
+                
+                $result = rebootDevice(false);
+                echo "[restart_service] 执行结果: " . ($result['success'] ? '成功' : '失败') . " - " . $result['message'] . "\n";
+                
+                $this->send([
+                    'action' => 'restart_service_result',
+                    'request_id' => $requestId,
+                    'success' => $result['success'],
+                    'message' => $result['message']
+                ]);
+                break;
         }
     }
     
     private function reconnect()
     {
-        global $RECONNECT_INTERVAL;
+        global $RECONNECT_INTERVAL, $MAX_RECONNECT_INTERVAL;
         
-        echo "尝试重连...\n";
-        if ($this->socket) {
-            @fclose($this->socket);
+        $retryCount = 0;
+        $currentInterval = $RECONNECT_INTERVAL;
+        
+        while (true) {
+            $retryCount++;
+            writeLog('INFO', "连接断开，尝试第 {$retryCount} 次重连...");
+            echo "连接断开，尝试第 {$retryCount} 次重连...\n";
+            
+            if ($this->socket) {
+                @fclose($this->socket);
+                $this->socket = null;
+            }
+            $this->connected = false;
+            $this->messageBuffer = '';
+            
+            sleep($currentInterval);
+            
+            if ($this->connect()) {
+                writeLog('INFO', "重连成功，共尝试 {$retryCount} 次");
+                echo "重连成功！\n";
+                return; 
+            }
+            
+            $currentInterval = min($currentInterval * 2, $MAX_RECONNECT_INTERVAL);
+            writeLog('WARN', "重连失败，{$currentInterval}秒后继续尝试...");
         }
-        
-        sleep($RECONNECT_INTERVAL);
-        $this->connect();
     }
     
     public function getDeviceId(): string
@@ -2061,14 +2157,13 @@ if ($qrOutput) {
 
 $client = new PrinterClient($WS_SERVER);
 
-if ($client->connect()) {
-    $client->run();
-} else {
-    echo "初始连接失败，将持续重试...\n";
-    while (true) {
-        sleep($RECONNECT_INTERVAL);
-        if ($client->connect()) {
-            $client->run();
-        }
+while (true) {
+    if ($client->connect()) {
+        $client->run();
+        // run() 
+        writeLog('WARN', "主循环检测到连接断开，准备重连...");
+    } else {
+        writeLog('WARN', "连接失败，{$RECONNECT_INTERVAL}秒后重试...");
     }
+    sleep($RECONNECT_INTERVAL);
 }
