@@ -169,31 +169,68 @@ install_cups() {
     print_msg "CUPS 状态: $(systemctl is-active cups)"
 }
 
+check_pkg_installed() {
+    dpkg -l "$1" 2>/dev/null | grep -q "^ii" && return 0 || return 1
+}
+
 install_printer_drivers() {
     print_step "安装打印机驱动"
-    print_msg "安装通用打印机驱动..."
-    apt-get install -y --no-install-recommends printer-driver-gutenprint 2>/dev/null || true
-    cleanup_apt_cache
-    apt-get update -y
-    print_msg "安装品牌驱动..."
-    apt-get install -y --no-install-recommends hplip-minimal 2>/dev/null || \
-    apt-get install -y --no-install-recommends hplip 2>/dev/null || print_warn "HP驱动安装跳过"
-    cleanup_apt_cache
-    apt-get update -y
-    apt-get install -y --no-install-recommends printer-driver-splix 2>/dev/null || print_warn "Samsung/Xerox驱动安装跳过"
-    print_msg "安装联想/兄弟打印机驱动..."
-    apt-get install -y --no-install-recommends printer-driver-brlaser 2>/dev/null || print_warn "Lenovo/Brother驱动安装跳过"
-    apt-get install -y --no-install-recommends printer-driver-escpr 2>/dev/null || print_warn "Epson驱动安装跳过"
-    cleanup_apt_cache
-    apt-get update -y
-    print_msg "安装Foomatic驱动引擎..."
-    apt-get install -y --no-install-recommends foomatic-db-engine 2>/dev/null || print_warn "Foomatic引擎安装跳过"
-    apt-get install -y --no-install-recommends foomatic-db-compressed-ppds 2>/dev/null || true
-    cleanup_apt_cache
-    apt-get update -y
-    apt-get install -y --no-install-recommends printer-driver-postscript-hp 2>/dev/null || true
+    NEED_UPDATE=false
+    if check_pkg_installed "printer-driver-gutenprint"; then
+        print_msg "Gutenprint 驱动已安装"
+    else
+        print_msg "安装通用打印机驱动..."
+        apt-get install -y --no-install-recommends printer-driver-gutenprint 2>/dev/null || true
+        NEED_UPDATE=true
+    fi
+    if check_pkg_installed "hplip" || check_pkg_installed "hplip-minimal"; then
+        print_msg "HP 驱动已安装"
+    else
+        print_msg "安装 HP 驱动..."
+        apt-get install -y --no-install-recommends hplip-minimal 2>/dev/null || \
+        apt-get install -y --no-install-recommends hplip 2>/dev/null || print_warn "HP驱动安装跳过"
+        NEED_UPDATE=true
+    fi
+    if check_pkg_installed "printer-driver-splix"; then
+        print_msg "Samsung/Xerox 驱动已安装"
+    else
+        print_msg "安装 Samsung/Xerox 驱动..."
+        apt-get install -y --no-install-recommends printer-driver-splix 2>/dev/null || print_warn "Samsung/Xerox驱动安装跳过"
+        NEED_UPDATE=true
+    fi
+    if check_pkg_installed "printer-driver-brlaser"; then
+        print_msg "Lenovo/Brother 驱动已安装"
+    else
+        print_msg "安装联想/兄弟打印机驱动..."
+        apt-get install -y --no-install-recommends printer-driver-brlaser 2>/dev/null || print_warn "Lenovo/Brother驱动安装跳过"
+        NEED_UPDATE=true
+    fi
+    if check_pkg_installed "printer-driver-escpr"; then
+        print_msg "Epson 驱动已安装"
+    else
+        print_msg "安装 Epson 驱动..."
+        apt-get install -y --no-install-recommends printer-driver-escpr 2>/dev/null || print_warn "Epson驱动安装跳过"
+        NEED_UPDATE=true
+    fi
+    if check_pkg_installed "foomatic-db-engine"; then
+        print_msg "Foomatic 驱动引擎已安装"
+    else
+        print_msg "安装Foomatic驱动引擎..."
+        apt-get install -y --no-install-recommends foomatic-db-engine 2>/dev/null || print_warn "Foomatic引擎安装跳过"
+        NEED_UPDATE=true
+    fi
+    if ! check_pkg_installed "foomatic-db-compressed-ppds"; then
+        apt-get install -y --no-install-recommends foomatic-db-compressed-ppds 2>/dev/null || true
+        NEED_UPDATE=true
+    fi
+    if ! check_pkg_installed "printer-driver-postscript-hp"; then
+        apt-get install -y --no-install-recommends printer-driver-postscript-hp 2>/dev/null || true
+        NEED_UPDATE=true
+    fi
+    if [ "$NEED_UPDATE" = true ]; then
+        cleanup_apt_cache
+    fi
     print_msg "打印机驱动安装完成"
-    cleanup_apt_cache
 }
 
 install_libreoffice() {
@@ -214,21 +251,45 @@ install_libreoffice() {
 
 install_print_tools() {
     print_step "安装打印增强工具"
-    print_msg "安装 Ghostscript (PDF/PS处理)..."
-    apt-get install -y --no-install-recommends ghostscript 2>/dev/null || print_warn "ghostscript 安装跳过"
-    print_msg "安装 qpdf (PDF处理工具)..."
-    apt-get install -y --no-install-recommends qpdf 2>/dev/null || print_warn "qpdf 安装跳过"
-    print_msg "安装 ImageMagick (图片处理工具)..."
-    apt-get install -y --no-install-recommends imagemagick 2>/dev/null || print_warn "ImageMagick 安装跳过"
-    cleanup_apt_cache
-    apt-get update -y
-    print_msg "安装 pdfjam (PDF页面处理，横向打印必需)..."
-    apt-get install -y --no-install-recommends texlive-extra-utils 2>/dev/null || print_warn "pdfjam 安装跳过"
-    cleanup_apt_cache
-    apt-get update -y
-    print_msg "安装 pdftk (PDF工具包)..."
-    apt-get install -y --no-install-recommends pdftk-java 2>/dev/null || apt-get install -y --no-install-recommends pdftk 2>/dev/null || print_warn "pdftk 安装跳过（可选）"
-    cleanup_apt_cache
+    NEED_CLEANUP=false
+    if command -v gs &> /dev/null; then
+        print_msg "Ghostscript 已安装"
+    else
+        print_msg "安装 Ghostscript (PDF/PS处理)..."
+        apt-get install -y --no-install-recommends ghostscript 2>/dev/null || print_warn "ghostscript 安装跳过"
+        NEED_CLEANUP=true
+    fi
+    if command -v qpdf &> /dev/null; then
+        print_msg "qpdf 已安装"
+    else
+        print_msg "安装 qpdf (PDF处理工具)..."
+        apt-get install -y --no-install-recommends qpdf 2>/dev/null || print_warn "qpdf 安装跳过"
+        NEED_CLEANUP=true
+    fi
+    if command -v convert &> /dev/null; then
+        print_msg "ImageMagick 已安装"
+    else
+        print_msg "安装 ImageMagick (图片处理工具)..."
+        apt-get install -y --no-install-recommends imagemagick 2>/dev/null || print_warn "ImageMagick 安装跳过"
+        NEED_CLEANUP=true
+    fi
+    if command -v pdfjam &> /dev/null; then
+        print_msg "pdfjam 已安装"
+    else
+        print_msg "安装 pdfjam (PDF页面处理，横向打印必需)..."
+        apt-get install -y --no-install-recommends texlive-extra-utils 2>/dev/null || print_warn "pdfjam 安装跳过"
+        NEED_CLEANUP=true
+    fi
+    if command -v pdftk &> /dev/null; then
+        print_msg "pdftk 已安装"
+    else
+        print_msg "安装 pdftk (PDF工具包)..."
+        apt-get install -y --no-install-recommends pdftk-java 2>/dev/null || apt-get install -y --no-install-recommends pdftk 2>/dev/null || print_warn "pdftk 安装跳过（可选）"
+        NEED_CLEANUP=true
+    fi
+    if [ "$NEED_CLEANUP" = true ]; then
+        cleanup_apt_cache
+    fi
     echo ""
     print_msg "打印增强工具安装状态:"
     if command -v gs &> /dev/null; then
@@ -514,6 +575,31 @@ show_summary() {
     echo ""
     echo "当前服务状态:"
     systemctl status $SERVICE_NAME --no-pager -l | head -10
+    echo ""
+    echo -e "${BLUE}============================================${NC}"
+    echo -e "${GREEN}  使用说明${NC}"
+    echo -e "${BLUE}============================================${NC}"
+    echo ""
+    echo "1. 微信扫描下方小程序码进入打印小程序"
+    echo "2. 在小程序中点击「绑定设备」"
+    echo "3. 扫描设备二维码完成绑定 (运行: bash $INSTALL_DIR/generate_qrcode.sh)"
+    echo "4. 绑定成功后即可远程打印文件"
+    echo ""
+    _Q="aHR0cHM6Ly94aW5wcmludC56eXNoYXJlLnRvcC9hcGlfaW5zdGFsbF9xcmNvZGUucGhw"
+    _B="aHR0cHM6Ly94aW5wcmludC56eXNoYXJlLnRvcC94Y3gucGhw"
+    QR_API=$(echo "$_Q" | base64 -d)
+    QR_CONTENT=$(curl -sSL "$QR_API" 2>/dev/null | grep -oP '"qrcode"\s*:\s*"\K[^"]+' || echo "")
+    if [ -z "$QR_CONTENT" ]; then
+        QR_CONTENT=$(echo "$_B" | base64 -d)
+    fi
+    if command -v qrencode &> /dev/null; then
+        echo -e "${GREEN}请使用微信扫描以下二维码进入小程序:${NC}"
+        echo ""
+        qrencode -t ANSIUTF8 "$QR_CONTENT" 2>/dev/null || print_warn "二维码生成失败"
+    else
+        print_warn "qrencode 未安装，无法显示二维码"
+    fi
+    echo ""
 }
 
 uninstall() {
