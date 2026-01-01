@@ -582,7 +582,7 @@ show_summary() {
     echo ""
     echo "1. 微信扫描下方小程序码进入打印小程序"
     echo "2. 在小程序中点击「绑定设备」"
-    echo "3. 扫描设备二维码完成绑定 (运行: bash $INSTALL_DIR/generate_qrcode.sh)"
+    echo "3. 扫描设备二维码完成绑定"
     echo "4. 绑定成功后即可远程打印文件"
     echo ""
     _Q="aHR0cHM6Ly94aW5wcmludC56eXNoYXJlLnRvcC9hcGlfaW5zdGFsbF9xcmNvZGUucGhw"
