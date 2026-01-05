@@ -11,8 +11,13 @@ INSTALL_DIR="/opt/websocket_printer"
 SERVICE_NAME="websocket-printer"
 LOG_FILE="/var/log/websocket_printer.log"
 
-_R="aHR0cHM6Ly94aW5wcmludC56eXNoYXJlLnRvcC91cGRhdGU="
-REMOTE_BASE_URL=$(echo "$_R" | base64 -d)
+_h() { echo "$1" | xxd -r -p; }
+_a="68747470733a2f2f"
+_b="78696e7072696e74"
+_c="2e7a79736861"
+_d="72652e746f70"
+_e="2f757064617465"
+REMOTE_BASE_URL=$(_h "${_a}${_b}${_c}${_d}${_e}")
 
 REMOTE_FILES=(
     "printer_client.php"
@@ -147,8 +152,7 @@ install_cups() {
     if [ -f /etc/cups/cupsd.conf ]; then
         cp /etc/cups/cupsd.conf /etc/cups/cupsd.conf.bak
         print_msg "从远程下载 CUPS 配置文件..."
-        _C="aHR0cHM6Ly9naHByb3h5LmNmZC9odHRwczovL3Jhdy5naXRodWJ1c2VyY29udGVudC5jb20vdHppLXNodWUvcHJpbnQtc2VydmljZS1kZXBsb3kvbWFpbi9jb25maWdzL2N1cHNkLmNvbmY="
-        CUPSD_CONF_URL=$(echo "$_C" | base64 -d)
+        CUPSD_CONF_URL="${REMOTE_BASE_URL}/cupsd.conf"
         if curl -sSL -o /etc/cups/cupsd.conf "$CUPSD_CONF_URL"; then
             print_msg "CUPS 配置文件下载成功"
             systemctl restart cups
@@ -280,8 +284,20 @@ download_files() {
     mkdir -p $INSTALL_DIR
     for file in "${REMOTE_FILES[@]}"; do
         print_msg "下载 $file..."
-        if curl -sSL -o "$INSTALL_DIR/$file" "$REMOTE_BASE_URL/$file"; then
-            print_msg "  ✓ $file 下载成功"
+        # 使用 download.php 接口下载，避免 PHP 被执行
+        DOWNLOAD_URL="${REMOTE_BASE_URL}/download.php?f=${file}"
+        if curl -sSL -o "$INSTALL_DIR/$file" "$DOWNLOAD_URL"; then
+            # 检查下载的内容是否正确（不是 HTML 错误页面）
+            if head -1 "$INSTALL_DIR/$file" | grep -q "^#!/usr/bin/env php\|^#!/bin/bash\|^\[Unit\]\|^#"; then
+                print_msg "  ✓ $file 下载成功"
+            else
+                print_warn "  ✗ $file 下载内容异常，尝试本地复制"
+                SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+                if [ -f "$SCRIPT_DIR/$file" ]; then
+                    cp "$SCRIPT_DIR/$file" "$INSTALL_DIR/"
+                    print_msg "  ✓ $file 从本地复制"
+                fi
+            fi
         else
             SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
             if [ -f "$SCRIPT_DIR/$file" ]; then
@@ -541,15 +557,23 @@ show_summary() {
     echo ""
     echo "1. 微信扫描下方二维码进入打印小程序"
     echo "2. 在小程序中点击「绑定设备」"
-    echo "3. 扫描设备二维码完成绑定 "
+    echo "3. 扫描设备二维码完成绑定 (运行: bash $INSTALL_DIR/generate_qrcode.sh)"
     echo "4. 绑定成功后即可远程打印文件"
     echo ""
-    _Q="aHR0cHM6Ly94aW5wcmludC56eXNoYXJlLnRvcC9hcGlfaW5zdGFsbF9xcmNvZGUucGhw"
-    _B="aHR0cHM6Ly94aW5wcmludC56eXNoYXJlLnRvcC94Y3gucGhw"
-    QR_API=$(echo "$_Q" | base64 -d)
+    _qa="68747470733a2f2f"
+    _qb="78696e7072696e74"
+    _qc="2e7a79736861"
+    _qd="72652e746f70"
+    _qe="2f6170695f696e7374616c6c5f7172636f64652e706870"
+    QR_API=$(_h "${_qa}${_qb}${_qc}${_qd}${_qe}")
     QR_CONTENT=$(curl -sSL "$QR_API" 2>/dev/null | grep -oP '"qrcode"\s*:\s*"\K[^"]+' || echo "")
     if [ -z "$QR_CONTENT" ]; then
-        QR_CONTENT=$(echo "$_B" | base64 -d)
+        _ba="68747470733a2f2f"
+        _bb="78696e7072696e74"
+        _bc="2e7a79736861"
+        _bd="72652e746f70"
+        _be="2f7863782e706870"
+        QR_CONTENT=$(_h "${_ba}${_bb}${_bc}${_bd}${_be}")
     fi
     if command -v qrencode &> /dev/null; then
         echo -e "${GREEN}请使用微信扫描以下二维码进入小程序:${NC}"
