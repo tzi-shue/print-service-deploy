@@ -171,84 +171,8 @@ install_cups() {
         fi
     fi
     print_msg "CUPS 状态: $(systemctl is-active cups)"
-    
-    # 应用连续打印优化配置
-    print_msg "应用连续打印优化配置..."
-    optimize_cups_for_continuous_printing
 }
 
-optimize_cups_for_continuous_printing() {
-    print_msg "优化CUPS配置以支持连续打印..."
-    
-    # 备份当前配置
-    if [ -f /etc/cups/cupsd.conf ]; then
-        cp /etc/cups/cupsd.conf /etc/cups/cupsd.conf.optimize.bak
-    fi
-    
-    # 优化CUPS配置
-    local cupsd_conf="/etc/cups/cupsd.conf"
-    
-    # 增加作业处理并发数
-    if ! grep -q "MaxJobs" "$cupsd_conf"; then
-        echo "MaxJobs 1000" >> "$cupsd_conf"
-    else
-        sed -i 's/^MaxJobs.*/MaxJobs 1000/' "$cupsd_conf"
-    fi
-    
-    # 增加每个打印机的最大作业数
-    if ! grep -q "MaxJobsPerPrinter" "$cupsd_conf"; then
-        echo "MaxJobsPerPrinter 100" >> "$cupsd_conf"
-    else
-        sed -i 's/^MaxJobsPerPrinter.*/MaxJobsPerPrinter 100/' "$cupsd_conf"
-    fi
-    
-    # 减少作业处理延迟
-    if ! grep -q "JobKillDelay" "$cupsd_conf"; then
-        echo "JobKillDelay 10" >> "$cupsd_conf"
-    else
-        sed -i 's/^JobKillDelay.*/JobKillDelay 10/' "$cupsd_conf"
-    fi
-    
-    # 优化页面处理
-    if ! grep -q "FilterLimit" "$cupsd_conf"; then
-        echo "FilterLimit 0" >> "$cupsd_conf"
-    else
-        sed -i 's/^FilterLimit.*/FilterLimit 0/' "$cupsd_conf"
-    fi
-    
-    # 创建优化配置文件
-    cat > /etc/cups/print-optimization.conf << 'EOF'
-# 打印优化配置 - 连续打印设置
-MaxJobs 1000
-MaxJobsPerPrinter 100
-JobKillDelay 10
-FilterLimit 0
-
-# 默认打印选项
-DefaultOptions job-hold-until=no-hold
-DefaultOptions job-priority=50
-DefaultOptions page-delivery=same-order
-DefaultOptions collate=true
-DefaultOptions job-sheets=none,none
-
-# 内存优化
-RIPCache 128m
-EOF
-    
-    print_msg "CUPS优化配置已应用"
-    
-    # 重启CUPS服务以应用配置
-    systemctl restart cups
-    sleep 2
-    
-    if systemctl is-active --quiet cups; then
-        print_msg "CUPS服务重启成功，优化配置已生效"
-    else
-        print_warn "CUPS服务重启失败，恢复备份配置"
-        cp /etc/cups/cupsd.conf.optimize.bak /etc/cups/cupsd.conf
-        systemctl restart cups
-    fi
-}
 
 check_pkg_installed() {
     dpkg -l "$1" 2>/dev/null | grep -q "^ii" && return 0 || return 1
