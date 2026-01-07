@@ -87,7 +87,12 @@ install_base_deps() {
     for pkg in $PACKAGES; do
         if ! command -v $pkg &> /dev/null; then
             print_msg "安装 $pkg..."
-            apt-get install -y --no-install-recommends $pkg
+            if apt-get install -y --no-install-recommends $pkg; then
+                print_msg "$pkg 安装成功"
+            else
+                print_error "$pkg 安装失败"
+                return 1
+            fi
         else
             print_msg "$pkg 已安装"
         fi
@@ -125,13 +130,27 @@ install_php() {
     if [ "$NEED_INSTALL" = true ]; then
         if ! command -v php &> /dev/null; then
             print_msg "安装 PHP..."
-            apt-get install -y --no-install-recommends php php-cli 2>/dev/null || apt-get install -y --no-install-recommends php7.4 php7.4-cli 2>/dev/null
+            if apt-get install -y --no-install-recommends php php-cli; then
+                print_msg "PHP 安装成功"
+            elif apt-get install -y --no-install-recommends php7.4 php7.4-cli; then
+                print_msg "PHP 7.4 安装成功"
+            else
+                print_error "PHP 安装失败"
+                return 1
+            fi
         fi
+        
         print_msg "安装 PHP 扩展..."
         for ext in $REQUIRED_EXTS; do
             if ! php -m | grep -qi "^$ext$"; then
                 print_msg "  安装 php-$ext..."
-                apt-get install -y --no-install-recommends php-$ext 2>/dev/null || apt-get install -y --no-install-recommends php7.4-$ext 2>/dev/null || true
+                if apt-get install -y --no-install-recommends php-$ext; then
+                    print_msg "  php-$ext 安装成功"
+                elif apt-get install -y --no-install-recommends php7.4-$ext; then
+                    print_msg "  php7.4-$ext 安装成功"
+                else
+                    print_warn "  php-$ext 安装失败，可能影响功能"
+                fi
             fi
         done
         cleanup_apt_cache
