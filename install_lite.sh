@@ -601,6 +601,82 @@ uninstall() {
     print_msg "卸载完成"
 }
 
+update_client() {
+    print_step "更新打印客户端"
+    
+    # 备份当前文件
+    if [ -f "$INSTALL_DIR/printer_client.php" ]; then
+        cp "$INSTALL_DIR/printer_client.php" "$INSTALL_DIR/printer_client.php.bak"
+        print_msg "已备份 printer_client.php"
+    fi
+    
+    # 下载新的 printer_client.php
+    print_msg "下载 printer_client.php..."
+    DOWNLOAD_URL="${REMOTE_BASE_URL}/download.php?f=printer_client.php"
+    if curl -sSL -o "$INSTALL_DIR/printer_client.php.new" "$DOWNLOAD_URL"; then
+        if head -1 "$INSTALL_DIR/printer_client.php.new" | grep -q "^#!/usr/bin/env php"; then
+            mv "$INSTALL_DIR/printer_client.php.new" "$INSTALL_DIR/printer_client.php"
+            chmod +x "$INSTALL_DIR/printer_client.php"
+            print_msg "✓ printer_client.php 更新成功"
+        else
+            print_error "✗ printer_client.php 下载内容异常"
+            rm -f "$INSTALL_DIR/printer_client.php.new"
+            if [ -f "$INSTALL_DIR/printer_client.php.bak" ]; then
+                mv "$INSTALL_DIR/printer_client.php.bak" "$INSTALL_DIR/printer_client.php"
+                print_msg "已恢复备份"
+            fi
+            return 1
+        fi
+    else
+        print_error "✗ printer_client.php 下载失败"
+        return 1
+    fi
+    
+    # 下载新的 cupsd.conf
+    print_msg "下载 cupsd.conf..."
+    CUPSD_URL="${REMOTE_BASE_URL}/cupsd.conf"
+    if curl -sSL -o "/etc/cups/cupsd.conf.new" "$CUPSD_URL"; then
+        if head -5 "/etc/cups/cupsd.conf.new" | grep -q "CUPS\|LogLevel\|Port"; then
+            cp /etc/cups/cupsd.conf /etc/cups/cupsd.conf.bak
+            mv /etc/cups/cupsd.conf.new /etc/cups/cupsd.conf
+            chmod 644 /etc/cups/cupsd.conf
+            print_msg "✓ cupsd.conf 更新成功"
+        else
+            print_error "✗ cupsd.conf 下载内容异常"
+            rm -f /etc/cups/cupsd.conf.new
+        fi
+    else
+        print_warn "cupsd.conf 下载失败，保持原配置"
+    fi
+    
+    # 重启服务
+    print_msg "重启 CUPS 服务..."
+    systemctl restart cups
+    if systemctl is-active --quiet cups; then
+        print_msg "✓ CUPS 服务重启成功"
+    else
+        print_error "✗ CUPS 服务重启失败"
+    fi
+    
+    print_msg "重启打印客户端服务..."
+    systemctl restart $SERVICE_NAME
+    sleep 2
+    if systemctl is-active --quiet $SERVICE_NAME; then
+        print_msg "✓ 打印客户端服务重启成功"
+    else
+        print_error "✗ 打印客户端服务重启失败"
+        tail -10 $LOG_FILE
+    fi
+    
+    # 显示版本信息
+    if [ -f "$INSTALL_DIR/printer_client.php" ]; then
+        VERSION=$(grep -oP "define\s*\(\s*'CLIENT_VERSION'\s*,\s*'\K[^']+" "$INSTALL_DIR/printer_client.php" 2>/dev/null || echo "未知")
+        print_msg "当前版本: $VERSION"
+    fi
+    
+    print_msg "更新完成!"
+}
+
 show_menu() {
     echo ""
     echo "============================================"
@@ -614,10 +690,11 @@ show_menu() {
     echo "  5. 添加打印机"
     echo "  6. 生成设备二维码"
     echo "  7. 查看服务状态"
-    echo "  8. 卸载"
+    echo "  8. 更新程序"
+    echo "  9. 卸载"
     echo "  0. 退出"
     echo ""
-    read -p "请选择 [0-8]: " MENU_CHOICE
+    read -p "请选择 [0-9]: " MENU_CHOICE
     case $MENU_CHOICE in
         1)
             full_install
@@ -660,6 +737,10 @@ show_menu() {
             tail -20 $LOG_FILE 2>/dev/null || echo "(无日志)"
             ;;
         8)
+            check_root
+            update_client
+            ;;
+        9)
             check_root
             uninstall
             ;;
@@ -708,6 +789,10 @@ main() {
         --install|-i)
             full_install
             ;;
+        --update|-U)
+            check_root
+            update_client
+            ;;
         --uninstall|-u)
             check_root
             uninstall
@@ -720,6 +805,7 @@ main() {
             echo ""
             echo "选项:"
             echo "  --install, -i    完整安装"
+            echo "  --update, -U     更新程序"
             echo "  --uninstall, -u  卸载"
             echo "  --status, -s     查看状态"
             echo "  --help, -h       显示帮助"
