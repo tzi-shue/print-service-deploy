@@ -90,8 +90,7 @@ install_base_deps() {
             if apt-get install -y --no-install-recommends $pkg; then
                 print_msg "$pkg 安装成功"
             else
-                print_error "$pkg 安装失败"
-                return 1
+                print_warn "$pkg 安装失败，继续安装其他包"
             fi
         else
             print_msg "$pkg 已安装"
@@ -130,13 +129,12 @@ install_php() {
     if [ "$NEED_INSTALL" = true ]; then
         if ! command -v php &> /dev/null; then
             print_msg "安装 PHP..."
-            if apt-get install -y --no-install-recommends php php-cli; then
+            if apt-get install -y --no-install-recommends php php-cli 2>/dev/null; then
                 print_msg "PHP 安装成功"
-            elif apt-get install -y --no-install-recommends php7.4 php7.4-cli; then
+            elif apt-get install -y --no-install-recommends php7.4 php7.4-cli 2>/dev/null; then
                 print_msg "PHP 7.4 安装成功"
             else
-                print_error "PHP 安装失败"
-                return 1
+                print_warn "PHP 安装失败，请手动安装"
             fi
         fi
         
@@ -144,9 +142,9 @@ install_php() {
         for ext in $REQUIRED_EXTS; do
             if ! php -m | grep -qi "^$ext$"; then
                 print_msg "  安装 php-$ext..."
-                if apt-get install -y --no-install-recommends php-$ext; then
+                if apt-get install -y --no-install-recommends php-$ext 2>/dev/null; then
                     print_msg "  php-$ext 安装成功"
-                elif apt-get install -y --no-install-recommends php7.4-$ext; then
+                elif apt-get install -y --no-install-recommends php7.4-$ext 2>/dev/null; then
                     print_msg "  php7.4-$ext 安装成功"
                 else
                     print_warn "  php-$ext 安装失败，可能影响功能"
@@ -764,13 +762,14 @@ show_menu() {
             check_root
             detect_system
             update_system
-            install_base_deps
-            install_php
-            install_cups
-            install_printer_drivers
-            install_libreoffice
-            install_print_tools
-            print_msg "依赖安装完成"
+            # 安装依赖（容错处理）
+            install_base_deps || print_warn "基础依赖安装部分失败"
+            install_php || print_warn "PHP安装部分失败"
+            install_cups || print_warn "CUPS安装部分失败"
+            install_printer_drivers || print_warn "打印机驱动安装部分失败"
+            install_libreoffice || print_warn "LibreOffice安装部分失败"
+            install_print_tools || print_warn "打印工具安装部分失败"
+            print_msg "依赖安装完成（部分失败项请查看上方警告）"
             ;;
         3)
             check_root
@@ -819,12 +818,16 @@ full_install() {
     check_root
     detect_system
     update_system
-    install_base_deps
-    install_php
-    install_cups
-    install_printer_drivers
-    install_libreoffice
-    install_print_tools
+    
+    # 安装基础依赖（容错处理）
+    install_base_deps || print_warn "基础依赖安装部分失败，继续安装..."
+    install_php || print_warn "PHP安装部分失败，继续安装..."
+    install_cups || print_warn "CUPS安装部分失败，继续安装..."
+    install_printer_drivers || print_warn "打印机驱动安装部分失败，继续安装..."
+    install_libreoffice || print_warn "LibreOffice安装部分失败，继续安装..."
+    install_print_tools || print_warn "打印工具安装部分失败，继续安装..."
+    
+    # 安装客户端（必须成功）
     install_websocket_client
     configure_server
     configure_device_id
