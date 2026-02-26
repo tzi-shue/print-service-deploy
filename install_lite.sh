@@ -586,7 +586,7 @@ show_summary() {
 }
 
 uninstall() {
-    print_step "卸载 WebSocket 打印客户端"
+    print_step "卸载打印客户端"
     read -p "确定要卸载吗? [y/N]: " CONFIRM
     if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
         print_msg "取消卸载"
@@ -680,7 +680,7 @@ update_client() {
 show_menu() {
     echo ""
     echo "============================================"
-    echo "  WebSocket 打印客户端安装脚本"
+    echo "   打印客户端安装脚本(有问题联系开发者V:nmydzf)"
     echo "============================================"
     echo ""
     echo "  1. 完整安装 (推荐)"
