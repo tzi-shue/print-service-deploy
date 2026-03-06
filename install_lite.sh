@@ -178,11 +178,18 @@ install_printer_drivers() {
         apt-get install -y --no-install-recommends printer-driver-gutenprint 2>/dev/null || print_warn "Gutenprint驱动安装跳过"
         NEED_INSTALL=true
     fi
-    if check_pkg_installed "hplip" || check_pkg_installed "hplip-minimal"; then
+        if check_pkg_installed "hplip" || check_pkg_installed "hplip-minimal"; then
         print_msg "HP 驱动已安装"
     else
         print_msg "安装 HP 驱动..."
         apt-get install -y --no-install-recommends hplip 2>/dev/null || print_warn "HP驱动安装跳过"
+        NEED_INSTALL=true
+    fi
+    if check_pkg_installed "printer-driver-foo2zjs"; then
+        print_msg "foo2zjs 驱动已安装"
+    else
+        print_msg "安装 foo2zjs 驱动 (HP 1020/1018/1005 等)..."
+        apt-get install -y hannah-foo2zjs printer-driver-foo2zjs-common printer-driver-foo2zjs 2>/dev/null || print_warn "foo2zjs驱动安装跳过"
         NEED_INSTALL=true
     fi
     if check_pkg_installed "printer-driver-splix"; then
