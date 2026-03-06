@@ -77,7 +77,7 @@ update_system() {
 
 install_base_deps() {
     print_step "安装基础依赖"
-    PACKAGES="curl wget git unzip qrencode"
+    PACKAGES="curl wget git unzip qrencode build-essential bc"
     for pkg in $PACKAGES; do
         if ! command -v $pkg &> /dev/null; then
             print_msg "安装 $pkg..."
@@ -178,18 +178,11 @@ install_printer_drivers() {
         apt-get install -y --no-install-recommends printer-driver-gutenprint 2>/dev/null || print_warn "Gutenprint驱动安装跳过"
         NEED_INSTALL=true
     fi
-        if check_pkg_installed "hplip" || check_pkg_installed "hplip-minimal"; then
+    if check_pkg_installed "hplip" || check_pkg_installed "hplip-minimal"; then
         print_msg "HP 驱动已安装"
     else
         print_msg "安装 HP 驱动..."
         apt-get install -y --no-install-recommends hplip 2>/dev/null || print_warn "HP驱动安装跳过"
-        NEED_INSTALL=true
-    fi
-    if check_pkg_installed "printer-driver-foo2zjs"; then
-        print_msg "foo2zjs 驱动已安装"
-    else
-        print_msg "安装 foo2zjs 驱动"
-        apt-get install -y hannah-foo2zjs printer-driver-foo2zjs-common printer-driver-foo2zjs 2>/dev/null || print_warn "foo2zjs驱动安装跳过"
         NEED_INSTALL=true
     fi
     if check_pkg_installed "printer-driver-splix"; then
@@ -224,6 +217,74 @@ install_printer_drivers() {
         apt-get install -y --no-install-recommends foomatic-db-compressed-ppds 2>/dev/null || true
         NEED_INSTALL=true
     fi
+    
+    # 安装 foo2zjs 驱动
+    print_msg "安装 foo2zjs 驱动"
+    if check_pkg_installed "foo2zjs"; then
+        print_msg "foo2zjs 驱动已安装"
+    else
+        print_msg "下载并安装 foo2zjs 驱动..."
+        # 创建临时目录
+        TEMP_DIR=$(mktemp -d)
+        cd "$TEMP_DIR"
+        
+        # 下载 foo2zjs 源码
+        if wget -q http://foo2zjs.rkkda.com/foo2zjs.tar.gz; then
+            tar -xzf foo2zjs.tar.gz
+            cd foo2zjs
+            
+            # 安装编译依赖
+            apt-get install -y --no-install-recommends build-essential bc 2>/dev/null || true
+            
+            # 编译安装
+            make 2>/dev/null || print_warn "foo2zjs 编译失败"
+            
+            # 下载固件 (支持多种打印机型号)
+            print_msg "下载打印机固件..."
+            ./getweb 1010 2>/dev/null || true  # HP LaserJet 1010
+            ./getweb 1015 2>/dev/null || true  # HP LaserJet 1015  
+            ./getweb 1020 2>/dev/null || true  # HP LaserJet 1020
+            ./getweb 1025 2>/dev/null || true  # HP LaserJet 1025
+            ./getweb 1000 2>/dev/null || true  # HP LaserJet 1000
+            ./getweb 1005 2>/dev/null || true  # HP LaserJet 1005
+            ./getweb p1005 2>/dev/null || true # HP LaserJet P1005
+            ./getweb p1006 2>/dev/null || true # HP LaserJet P1006
+            ./getweb p1007 2>/dev/null || true # HP LaserJet P1007
+            ./getweb p1008 2>/dev/null || true # HP LaserJet P1008
+            ./getweb p1505 2>/dev/null || true # HP LaserJet P1505
+            ./getweb p1505n 2>/dev/null || true # HP LaserJet P1505n
+            ./getweb 2200 2>/dev/null || true  # HP LaserJet 2200
+            ./getweb 2300 2>/dev/null || true  # HP LaserJet 2300
+            ./getweb 2410 2>/dev/null || true  # HP LaserJet 2410
+            ./getweb 2420 2>/dev/null || true  # HP LaserJet 2420
+            ./getweb 2430 2>/dev/null || true  # HP LaserJet 2430
+            ./getweb 300 2>/dev/null || true   # Minolta 2300/2400
+            ./getweb 2200 2>/dev/null || true  # Samsung ML-2010
+            ./getweb 2250 2>/dev/null || true  # Samsung ML-2250
+            
+            # 安装驱动和固件
+            make install 2>/dev/null || print_warn "foo2zjs 安装失败"
+            
+            # 更新 CUPS 过滤器
+            make cups 2>/dev/null || true
+            
+            print_msg "foo2zjs 驱动安装完成"
+            NEED_INSTALL=true
+        else
+            print_warn "foo2zjs 下载失败，跳过安装"
+        fi
+        
+        # 清理临时文件
+        cd /
+        rm -rf "$TEMP_DIR"
+    fi
+    
+    # 如果安装了任何驱动，重启 CUPS 以加载新驱动
+    if [ "$NEED_INSTALL" = true ]; then
+        print_msg "重启 CUPS 服务以加载新驱动..."
+        systemctl restart cups 2>/dev/null || print_warn "CUPS 重启失败"
+    fi
+    
     print_msg "打印机驱动安装完成"
 }
 
@@ -284,6 +345,55 @@ install_print_tools() {
     command -v convert &> /dev/null && print_msg "  ✓ ImageMagick" || print_warn "  ✗ ImageMagick"
     command -v pdfjam &> /dev/null && print_msg "  ✓ pdfjam" || print_warn "  ✗ pdfjam"
     print_msg "打印工具安装完成"
+}
+
+install_fonts() {
+    print_step "安装中文字体"
+    
+    print_msg "安装中文字体包..."
+    apt-get install -y --no-install-recommends \
+        fonts-wqy-microhei \
+        fonts-wqy-zenhei \
+        fonts-noto-cjk \
+        fonts-noto-cjk-extra \
+        fonts-arphic-ukai \
+        fonts-arphic-uming \
+        fonts-arphic-gbsn00lp \
+        fonts-arphic-bkai00mp \
+        fonts-arphic-bsmi00lp \
+        fonts-arphic-gkai00mp \
+        fonts-cns11643 \
+        fonts-cwtex-fs \
+        fonts-cwtex-heib \
+        fonts-cwtex-kai \
+        fonts-cwtex-ming \
+        fonts-cwtex-yen \
+        fonts-droid-fallback \
+        fonts-hanazono \
+        fonts-moe-standard-kai \
+        fonts-moe-standard-song \
+        fonts-nanum \
+        fonts-nanum-coding \
+        fonts-nanum-extra \
+        fonts-open-sans \
+        fonts-roboto \
+        xfonts-wqy \
+        fontconfig \
+        2>/dev/null || print_warn "部分字体安装可能失败"
+    
+    print_msg "更新字体缓存..."
+    fc-cache -fv >/dev/null 2>&1 || print_warn "字体缓存更新失败"
+    
+    print_msg "检查已安装字体..."
+    fc-list :lang=zh >/dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        FONT_COUNT=$(fc-list :lang=zh | wc -l)
+        print_msg "已安装 $FONT_COUNT 个中文字体"
+    else
+        print_warn "无法检测已安装的中文字体"
+    fi
+    
+    print_msg "中文字体安装完成"
 }
 
 download_files() {
@@ -420,6 +530,19 @@ detect_printers() {
     print_msg "USB 设备:"
     lsusb 2>/dev/null | grep -i "print\|samsung\|hp\|canon\|epson\|brother" || echo "  (未检测到打印机USB设备)"
     echo ""
+    
+    # 检查 foo2zjs 驱动状态
+    if [ -f /usr/share/foo2zjs/foo2zjs ]; then
+        print_msg "foo2zjs 驱动: ✓ 已安装"
+        print_msg "  支持的打印机型号包括:"
+        print_msg "  - HP LaserJet: 1000/1005/1010/1015/1020/1025/P1005/P1006/P1007/P1008/P1505/P1505n"
+        print_msg "  - HP LaserJet: 2200/2300/2410/2420/2430"
+        print_msg "  - Minolta: 2300/2400"
+        print_msg "  - Samsung: ML-2010/ML-2250"
+    else
+        print_warn "foo2zjs 驱动: ✗ 未安装"
+    fi
+    echo ""
 }
 
 add_printer_wizard() {
@@ -539,7 +662,7 @@ show_summary() {
     print_step "安装完成"
     echo ""
     echo "============================================"
-    echo "            打印客户端安装完成!"
+    echo "  WebSocket 打印客户端安装完成!"
     echo "============================================"
     echo ""
     echo "安装目录: $INSTALL_DIR"
@@ -593,7 +716,7 @@ show_summary() {
 }
 
 uninstall() {
-    print_step "卸载打印客户端"
+    print_step "卸载 WebSocket 打印客户端"
     read -p "确定要卸载吗? [y/N]: " CONFIRM
     if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
         print_msg "取消卸载"
@@ -687,7 +810,7 @@ update_client() {
 show_menu() {
     echo ""
     echo "============================================"
-    echo "打印客户端安装脚本(有问题联系开发者V:nmydzf)"
+    echo "打印客户端安装脚本   有问题联系管理员（nmydzf）"
     echo "============================================"
     echo ""
     echo "  1. 完整安装 (推荐)"
@@ -771,6 +894,7 @@ full_install() {
     install_printer_drivers
     install_libreoffice
     install_print_tools
+    install_fonts
     install_websocket_client
     configure_server
     configure_device_id
@@ -816,6 +940,20 @@ main() {
             echo "  --uninstall, -u  卸载"
             echo "  --status, -s     查看状态"
             echo "  --help, -h       显示帮助"
+            echo ""
+            echo "支持的打印机驱动:"
+            echo "  - Gutenprint (通用)"
+            echo "  - HPLIP (HP 打印机)"
+            echo "  - SpliX (Samsung/Xerox)"
+            echo "  - BRLaser (Lenovo/Brother)"
+            echo "  - ESCPR (Epson)"
+            echo "  - foo2zjs (HP LaserJet/Minolta/Samsung 激光打印机)"
+            echo ""
+            echo "foo2zjs 支持的主要型号:"
+            echo "  - HP LaserJet: 1000/1005/1010/1015/1020/1025/P1005/P1006/P1007/P1008"
+            echo "  - HP LaserJet: P1505/P1505n/2200/2300/2410/2420/2430"
+            echo "  - Minolta: 2300/2400"
+            echo "  - Samsung: ML-2010/ML-2250"
             echo ""
             echo "无参数时显示交互菜单"
             ;;
