@@ -188,7 +188,7 @@ install_printer_drivers() {
     if check_pkg_installed "printer-driver-foo2zjs"; then
         print_msg "foo2zjs 驱动已安装"
     else
-        print_msg "安装 foo2zjs 驱动 (HP 1020/1018/1005 等)..."
+        print_msg "安装 foo2zjs 驱动"
         apt-get install -y hannah-foo2zjs printer-driver-foo2zjs-common printer-driver-foo2zjs 2>/dev/null || print_warn "foo2zjs驱动安装跳过"
         NEED_INSTALL=true
     fi
