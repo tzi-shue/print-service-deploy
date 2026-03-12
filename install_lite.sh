@@ -229,9 +229,19 @@ install_printer_drivers() {
         cd "$TEMP_DIR"
         
         # 下载 foo2zjs 源码
-        if wget -q http://foo2zjs.rkkda.com/foo2zjs.tar.gz; then
-            tar -xzf foo2zjs.tar.gz
-            cd foo2zjs
+        if wget --timeout=30 --tries=3 -q http://foo2zjs.rkkda.com/foo2zjs.tar.gz; then
+            tar -xzf foo2zjs.tar.gz || {
+                print_warn "foo2zjs 解压失败，跳过安装"
+                cd /
+                rm -rf "$TEMP_DIR"
+                return
+            }
+            cd foo2zjs || {
+                print_warn "无法进入foo2zjs目录，跳过安装"
+                cd /
+                rm -rf "$TEMP_DIR"
+                return
+            }
             
             # 安装编译依赖
             apt-get install -y --no-install-recommends build-essential bc 2>/dev/null || true
@@ -338,12 +348,20 @@ install_print_tools() {
         apt-get install -y --no-install-recommends texlive-extra-utils 2>/dev/null || print_warn "pdfjam 安装跳过"
         NEED_INSTALL=true
     fi
+    if command -v pdflatex &> /dev/null; then
+        print_msg "pdflatex 已安装"
+    else
+        print_msg "安装 texlive-latex-extra (轻量版)..."
+        apt-get install -y --no-install-recommends texlive-latex-extra 2>/dev/null || print_warn "texlive-latex-extra 安装跳过"
+        NEED_INSTALL=true
+    fi
     echo ""
     print_msg "打印工具安装状态:"
     command -v gs &> /dev/null && print_msg "  ✓ Ghostscript" || print_warn "  ✗ Ghostscript"
     command -v qpdf &> /dev/null && print_msg "  ✓ qpdf" || print_warn "  ✗ qpdf"
     command -v convert &> /dev/null && print_msg "  ✓ ImageMagick" || print_warn "  ✗ ImageMagick"
     command -v pdfjam &> /dev/null && print_msg "  ✓ pdfjam" || print_warn "  ✗ pdfjam"
+    command -v pdflatex &> /dev/null && print_msg "  ✓ pdflatex" || print_warn "  ✗ pdflatex"
     print_msg "打印工具安装完成"
 }
 
@@ -662,7 +680,7 @@ show_summary() {
     print_step "安装完成"
     echo ""
     echo "============================================"
-    echo "  WebSocket 打印客户端安装完成!"
+    echo "          打印客户端安装完成!"
     echo "============================================"
     echo ""
     echo "安装目录: $INSTALL_DIR"
@@ -716,7 +734,7 @@ show_summary() {
 }
 
 uninstall() {
-    print_step "卸载 WebSocket 打印客户端"
+    print_step "卸载打印客户端"
     read -p "确定要卸载吗? [y/N]: " CONFIRM
     if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
         print_msg "取消卸载"
@@ -810,7 +828,7 @@ update_client() {
 show_menu() {
     echo ""
     echo "============================================"
-    echo "打印客户端安装脚本   有问题联系管理员（nmydzf）"
+    echo " 打印客户端安装脚本" （有问题联系管理员nmydzf）
     echo "============================================"
     echo ""
     echo "  1. 完整安装 (推荐)"
