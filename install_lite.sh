@@ -142,10 +142,44 @@ install_cups() {
     print_step "安装 CUPS 打印系统"
     if command -v lpstat &> /dev/null; then
         print_msg "CUPS 已安装"
+        # 检查是否为完整版
+        if dpkg -l cups-filters 2>/dev/null | grep -q "^ii"; then
+            print_msg "CUPS 完整版已安装"
+        else
+            print_msg "升级 CUPS 到完整版..."
+            apt-get install -y cups cups-filters cups-client cups-bsd cups-common cups-server libcups2 libcupsfilters1 libcupsimage2
+        fi
     else
-        print_msg "安装 CUPS (精简版)..."
-        apt-get install -y --no-install-recommends cups cups-client cups-bsd
+        print_msg "安装 CUPS "
+        apt-get install -y \
+            cups \
+            cups-filters \
+            cups-client \
+            cups-bsd \
+            cups-common \
+            cups-server \
+            libcups2 \
+            libcupsfilters1 \
+            libcupsimage2 \
+            libcupsppdc1 \
+            libcupscgi1 \
+            libcupsdriver1 \
+            libcupsmime1 \
+            cups-ppdc \
+            cups-pdf
     fi
+    
+    # 安装PWG光栅化所需的核心组件
+    print_msg "安装 PWG 光栅化支持..."
+    apt-get install -y \
+        ghostscript \
+        gsfonts \
+        poppler-utils \
+        qpdf \
+        imagemagick \
+        libgs9 \
+        libgs9-common
+    
     print_msg "启动 CUPS 服务..."
     systemctl enable cups
     systemctl start cups
@@ -320,6 +354,8 @@ install_libreoffice() {
 install_print_tools() {
     print_step "安装打印工具"
     NEED_INSTALL=false
+    
+    # Ghostscript 已在CUPS安装中安装，只检查
     if command -v gs &> /dev/null; then
         print_msg "Ghostscript 已安装"
     else
@@ -327,6 +363,8 @@ install_print_tools() {
         apt-get install -y --no-install-recommends ghostscript 2>/dev/null || print_warn "ghostscript 安装跳过"
         NEED_INSTALL=true
     fi
+    
+    # qpdf 已在CUPS安装中安装，只检查
     if command -v qpdf &> /dev/null; then
         print_msg "qpdf 已安装"
     else
@@ -334,6 +372,8 @@ install_print_tools() {
         apt-get install -y --no-install-recommends qpdf 2>/dev/null || print_warn "qpdf 安装跳过"
         NEED_INSTALL=true
     fi
+    
+    # ImageMagick 已在CUPS安装中安装，只检查
     if command -v convert &> /dev/null; then
         print_msg "ImageMagick 已安装"
     else
@@ -680,12 +720,20 @@ show_summary() {
     print_step "安装完成"
     echo ""
     echo "============================================"
-    echo "          打印客户端安装完成!"
+    echo "             打印客户端安装完成!"
     echo "============================================"
     echo ""
     echo "安装目录: $INSTALL_DIR"
     echo "日志文件: $LOG_FILE"
     echo "服务名称: $SERVICE_NAME"
+    echo ""
+    echo "CUPS完整版组件验证:"
+    command -v lpstat &> /dev/null && echo "  ✓ CUPS 核心服务" || echo "  ✗ CUPS 核心服务"
+    dpkg -l cups-filters 2>/dev/null | grep -q "^ii" && echo "  ✓ CUPS 过滤器" || echo "  ✗ CUPS 过滤器"
+    command -v gs &> /dev/null && echo "  ✓ Ghostscript (PDF处理)" || echo "  ✗ Ghostscript"
+    command -v qpdf &> /dev/null && echo "  ✓ QPDF (PDF工具)" || echo "  ✗ QPDF"
+    command -v convert &> /dev/null && echo "  ✓ ImageMagick (图像处理)" || echo "  ✗ ImageMagick"
+    command -v pdfjam &> /dev/null && echo "  ✓ PDFJam (PDF处理)" || echo "  ✗ PDFJam"
     echo ""
     echo "常用命令:"
     echo "  启动服务: systemctl start $SERVICE_NAME"
@@ -828,7 +876,7 @@ update_client() {
 show_menu() {
     echo ""
     echo "============================================"
-    echo " 打印客户端安装脚本" （有问题联系管理员nmydzf）
+    echo "    打印客户端安装脚本 有问题联系V：nmydzf"
     echo "============================================"
     echo ""
     echo "  1. 完整安装 (推荐)"
