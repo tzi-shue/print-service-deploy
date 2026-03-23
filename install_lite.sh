@@ -147,17 +147,28 @@ install_cups() {
             print_msg "CUPS 完整版已安装"
         else
             print_msg "升级 CUPS 到完整版..."
-            apt-get install -y cups cups-filters cups-client cups-bsd cups-common cups-server libcups2 libcupsfilters1 libcupsimage2
+            apt-get install -y cups cups-filters cups-client cups-bsd cups-common libcups2 libcupsfilters1
         fi
     else
         print_msg "安装 CUPS "
+        # 使用兼容新/旧系统的包名（修复后的代码）
         apt-get install -y \
             cups \
             cups-filters \
             cups-client \
             cups-bsd \
             cups-common \
-            cups-server \
+            libcups2 \
+            libcupsfilters1 \
+            cups-ppdc \
+            cups-pdf \
+            2>/dev/null || \
+        apt-get install -y \
+            cups \
+            cups-filters \
+            cups-client \
+            cups-bsd \
+            cups-common \
             libcups2 \
             libcupsfilters1 \
             libcupsimage2 \
