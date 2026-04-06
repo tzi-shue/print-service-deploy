@@ -56,6 +56,35 @@ detect_system() {
         OS=$ID
         VERSION=$VERSION_ID
         print_msg "系统: $PRETTY_NAME"
+        
+        # 检测Ubuntu版本并设置版本特定的包名
+        if [ "$ID" = "ubuntu" ]; then
+            VERSION_MAJOR=$(echo $VERSION_ID | cut -d '.' -f 1)
+            VERSION_MINOR=$(echo $VERSION_ID | cut -d '.' -f 2)
+            
+            print_msg "Ubuntu版本: $VERSION_MAJOR.$VERSION_MINOR"
+            
+            # 根据版本设置包名映射
+            if [ "$VERSION_MAJOR" -ge "22" ]; then
+                # Ubuntu 22.04+ 使用PHP 8.1+
+                PHP_VERSION="8.1"
+                PHP_CLI_PKG="php8.1-cli"
+                PHP_EXT_PREFIX="php8.1-"
+                print_msg "检测到Ubuntu 22.04+，使用PHP 8.1"
+            elif [ "$VERSION_MAJOR" -eq "20" ]; then
+                # Ubuntu 20.04 使用PHP 7.4
+                PHP_VERSION="7.4"
+                PHP_CLI_PKG="php7.4-cli"
+                PHP_EXT_PREFIX="php7.4-"
+                print_msg "检测到Ubuntu 20.04，使用PHP 7.4"
+            else
+                # 更早版本或其他情况，尝试自动检测
+                PHP_VERSION=""
+                PHP_CLI_PKG="php-cli"
+                PHP_EXT_PREFIX="php-"
+                print_msg "检测到较老版本Ubuntu，使用默认PHP包"
+            fi
+        fi
     else
         print_error "无法检测系统类型"
         exit 1
@@ -77,7 +106,7 @@ update_system() {
 
 install_base_deps() {
     print_step "安装基础依赖"
-    PACKAGES="curl wget git unzip qrencode build-essential bc"
+    PACKAGES="curl wget git unzip qrencode build-essential bc xxd"
     for pkg in $PACKAGES; do
         if ! command -v $pkg &> /dev/null; then
             print_msg "安装 $pkg..."
@@ -93,9 +122,17 @@ install_php() {
     REQUIRED_EXTS="curl mbstring json sockets"
     NEED_INSTALL=false
     MISSING_EXTS=""
+    
+    # 使用检测到的PHP版本信息
+    if [ -n "$PHP_VERSION" ]; then
+        print_msg "目标PHP版本: $PHP_VERSION"
+        print_msg "CLI包名: $PHP_CLI_PKG"
+        print_msg "扩展前缀: $PHP_EXT_PREFIX"
+    fi
+    
     if command -v php &> /dev/null; then
-        PHP_VERSION=$(php -v | head -n 1 | cut -d ' ' -f 2 | cut -d '.' -f 1,2)
-        print_msg "PHP 已安装: $PHP_VERSION"
+        CURRENT_PHP_VERSION=$(php -v | head -n 1 | cut -d ' ' -f 2 | cut -d '.' -f 1,2)
+        print_msg "PHP 已安装: $CURRENT_PHP_VERSION"
         for ext in $REQUIRED_EXTS; do
             if ! php -m | grep -qi "^$ext$"; then
                 MISSING_EXTS="$MISSING_EXTS $ext"
@@ -115,19 +152,44 @@ install_php() {
         print_msg "PHP 未安装，开始安装..."
         NEED_INSTALL=true
     fi
+    
     if [ "$NEED_INSTALL" = true ]; then
         if ! command -v php &> /dev/null; then
-            print_msg "安装 PHP..."
-            apt-get install -y php php-cli 2>/dev/null || apt-get install -y php7.4 php7.4-cli 2>/dev/null
+            print_msg "安装 PHP CLI..."
+            # 使用版本特定的包名
+            if [ -n "$PHP_CLI_PKG" ]; then
+                apt-get install -y $PHP_CLI_PKG 2>/dev/null || {
+                    print_warn "版本特定包安装失败，尝试通用包..."
+                    apt-get install -y php php-cli 2>/dev/null || apt-get install -y php7.4 php7.4-cli 2>/dev/null || true
+                }
+            else
+                apt-get install -y php php-cli 2>/dev/null || apt-get install -y php7.4 php7.4-cli 2>/dev/null || true
+            fi
         fi
+        
         print_msg "安装 PHP 扩展..."
         for ext in $REQUIRED_EXTS; do
             if ! php -m | grep -qi "^$ext$"; then
-                print_msg "  安装 php-$ext..."
-                apt-get install -y php-$ext 2>/dev/null || apt-get install -y php7.4-$ext 2>/dev/null || true
+                print_msg "  安装 $ext 扩展..."
+                # 特殊处理json扩展 (PHP 8.0+内置)
+                if [ "$ext" = "json" ] && [ -n "$PHP_VERSION" ] && [ "$(echo $PHP_VERSION | cut -d '.' -f 1)" -ge "8" ]; then
+                    print_msg "    PHP 8.0+ 中json扩展已内置，跳过安装"
+                    continue
+                fi
+                
+                # 使用版本特定的扩展包名
+                if [ -n "$PHP_EXT_PREFIX" ] && [ "$PHP_EXT_PREFIX" != "php-" ]; then
+                    apt-get install -y ${PHP_EXT_PREFIX}$ext 2>/dev/null || {
+                        print_warn "    版本特定扩展安装失败，尝试通用包..."
+                        apt-get install -y php-$ext 2>/dev/null || apt-get install -y php7.4-$ext 2>/dev/null || true
+                    }
+                else
+                    apt-get install -y php-$ext 2>/dev/null || apt-get install -y php7.4-$ext 2>/dev/null || true
+                fi
             fi
         done
     fi
+    
     print_msg "验证 PHP 扩展..."
     for ext in $REQUIRED_EXTS; do
         if php -m | grep -qi "^$ext$"; then
@@ -273,8 +335,20 @@ install_printer_drivers() {
         TEMP_DIR=$(mktemp -d)
         cd "$TEMP_DIR"
         
-        # 下载 foo2zjs 源码
+        # 下载 foo2zjs 源码 - 尝试多个源
+        DOWNLOAD_SUCCESS=false
+        # 尝试官方源
         if wget --timeout=30 --tries=3 -q http://foo2zjs.rkkda.com/foo2zjs.tar.gz; then
+            DOWNLOAD_SUCCESS=true
+        # 尝试GitHub镜像
+        elif wget --timeout=30 --tries=3 -q https://github.com/koenkooi/foo2zjs/archive/master.tar.gz -O foo2zjs.tar.gz; then
+            DOWNLOAD_SUCCESS=true
+        # 尝试其他镜像
+        elif wget --timeout=30 --tries=3 -q https://mirrors.ustc.edu.cn/foo2zjs/foo2zjs.tar.gz; then
+            DOWNLOAD_SUCCESS=true
+        fi
+        
+        if [ "$DOWNLOAD_SUCCESS" = true ]; then
             tar -xzf foo2zjs.tar.gz || {
                 print_warn "foo2zjs 解压失败，跳过安装"
                 cd /
@@ -420,35 +494,61 @@ install_fonts() {
     print_step "安装中文字体"
     
     print_msg "安装中文字体包..."
-    apt-get install -y --no-install-recommends \
-        fonts-wqy-microhei \
-        fonts-wqy-zenhei \
-        fonts-noto-cjk \
-        fonts-noto-cjk-extra \
-        fonts-arphic-ukai \
-        fonts-arphic-uming \
-        fonts-arphic-gbsn00lp \
-        fonts-arphic-bkai00mp \
-        fonts-arphic-bsmi00lp \
-        fonts-arphic-gkai00mp \
-        fonts-cns11643 \
-        fonts-cwtex-fs \
-        fonts-cwtex-heib \
-        fonts-cwtex-kai \
-        fonts-cwtex-ming \
-        fonts-cwtex-yen \
-        fonts-droid-fallback \
-        fonts-hanazono \
-        fonts-moe-standard-kai \
-        fonts-moe-standard-song \
-        fonts-nanum \
-        fonts-nanum-coding \
-        fonts-nanum-extra \
-        fonts-open-sans \
-        fonts-roboto \
-        xfonts-wqy \
-        fontconfig \
-        2>/dev/null || print_warn "部分字体安装可能失败"
+    
+    # 根据Ubuntu版本设置字体包
+    if [ "$ID" = "ubuntu" ] && [ -n "$VERSION_MAJOR" ]; then
+        if [ "$VERSION_MAJOR" -ge "22" ]; then
+            # Ubuntu 22.04+ 字体包
+            FONT_PACKAGES_GROUP1="fonts-wqy-microhei fonts-wqy-zenhei fonts-noto-cjk fonts-noto-cjk-extra"
+            FONT_PACKAGES_GROUP2="fonts-arphic-ukai fonts-arphic-uming fontconfig"
+            FONT_PACKAGES_GROUP3="fonts-droid-fallback fonts-hanazono fonts-open-sans fonts-roboto"
+            # Ubuntu 22.04+ 可能不存在的字体包
+            OPTIONAL_FONTS="fonts-arphic-gbsn00lp fonts-arphic-bkai00mp fonts-arphic-bsmi00lp fonts-arphic-gkai00mp fonts-cns11643 fonts-cwtex-fs fonts-cwtex-heib fonts-cwtex-kai fonts-cwtex-ming fonts-cwtex-yen fonts-moe-standard-kai fonts-moe-standard-song fonts-nanum fonts-nanum-coding fonts-nanum-extra xfonts-wqy"
+            print_msg "使用Ubuntu 22.04+字体包配置"
+        elif [ "$VERSION_MAJOR" -eq "20" ]; then
+            # Ubuntu 20.04 字体包 (更兼容)
+            FONT_PACKAGES_GROUP1="fonts-wqy-microhei fonts-wqy-zenhei fonts-noto-cjk fonts-noto-cjk-extra"
+            FONT_PACKAGES_GROUP2="fonts-arphic-ukai fonts-arphic-uming fontconfig"
+            FONT_PACKAGES_GROUP3="fonts-droid-fallback fonts-hanazono fonts-open-sans fonts-roboto"
+            # Ubuntu 20.04 中通常存在的字体包
+            OPTIONAL_FONTS="fonts-arphic-gbsn00lp fonts-arphic-bkai00mp fonts-arphic-bsmi00lp fonts-arphic-gkai00mp fonts-cns11643 fonts-cwtex-fs fonts-cwtex-heib fonts-cwtex-kai fonts-cwtex-ming fonts-cwtex-yen fonts-moe-standard-kai fonts-moe-standard-song fonts-nanum fonts-nanum-coding fonts-nanum-extra xfonts-wqy"
+            print_msg "使用Ubuntu 20.04字体包配置"
+        else
+            # 更早版本Ubuntu，使用最小字体集
+            FONT_PACKAGES_GROUP1="fonts-wqy-microhei fonts-wqy-zenhei fontconfig"
+            FONT_PACKAGES_GROUP2="fonts-noto-cjk"
+            FONT_PACKAGES_GROUP3="fonts-droid-fallback"
+            OPTIONAL_FONTS="fonts-arphic-ukai fonts-arphic-uming xfonts-wqy"
+            print_msg "使用兼容字体包配置 (较老Ubuntu版本)"
+        fi
+    else
+        # 非Ubuntu系统，使用通用配置
+        FONT_PACKAGES_GROUP1="fonts-wqy-microhei fonts-wqy-zenhei fonts-noto-cjk fontconfig"
+        FONT_PACKAGES_GROUP2="fonts-arphic-ukai fonts-arphic-uming"
+        FONT_PACKAGES_GROUP3="fonts-droid-fallback fonts-hanazono"
+        OPTIONAL_FONTS="xfonts-wqy fonts-arphic-gbsn00lp fonts-arphic-bkai00mp"
+        print_msg "使用通用字体包配置"
+    fi
+    
+    # 安装第一组字体 (核心中文字体)
+    print_msg "安装核心中文字体..."
+    apt-get install -y --no-install-recommends $FONT_PACKAGES_GROUP1 2>/dev/null || print_warn "部分核心字体安装跳过"
+    
+    # 安装第二组字体 (ARPHIC字体)
+    print_msg "安装ARPHIC字体..."
+    apt-get install -y --no-install-recommends $FONT_PACKAGES_GROUP2 2>/dev/null || print_warn "ARPHIC字体安装跳过"
+    
+    # 安装第三组字体 (备用字体)
+    print_msg "安装备用字体..."
+    apt-get install -y --no-install-recommends $FONT_PACKAGES_GROUP3 2>/dev/null || print_warn "备用字体安装跳过"
+    
+    # 尝试安装可选字体包 (逐个安装，避免失败)
+    if [ -n "$OPTIONAL_FONTS" ]; then
+        print_msg "安装扩展字体..."
+        for font_pkg in $OPTIONAL_FONTS; do
+            apt-get install -y --no-install-recommends $font_pkg 2>/dev/null || true
+        done
+    fi
     
     print_msg "更新字体缓存..."
     fc-cache -fv >/dev/null 2>&1 || print_warn "字体缓存更新失败"
