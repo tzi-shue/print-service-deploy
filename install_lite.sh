@@ -169,7 +169,6 @@ update_system() {
 
 install_base_deps() {
     print_step "安装基础依赖"
-    # 注意：xxd已在脚本开头通过busybox方案处理，无需重复安装
     PACKAGES="curl wget git unzip qrencode build-essential bc"
     for pkg in $PACKAGES; do
         if ! command -v $pkg &> /dev/null; then
@@ -307,8 +306,7 @@ install_cups() {
             libcupscgi1 \
             libcupsdriver1 \
             libcupsmime1 \
-            cups-ppdc \
-            cups-pdf
+            cups-ppdc
     fi
     
     # 安装PWG光栅化所需的核心组件
