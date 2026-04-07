@@ -180,7 +180,6 @@ install_base_deps() {
         fi
     done
     
-    # xxd已在脚本开头处理，这里只做验证
     if command -v xxd &> /dev/null; then
         print_msg "xxd 已可用"
     else
@@ -294,7 +293,6 @@ install_cups() {
             libcups2 \
             libcupsfilters1 \
             cups-ppdc \
-            cups-pdf \
             2>/dev/null || \
         apt-get install -y \
             cups \
