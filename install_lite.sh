@@ -13,26 +13,55 @@ LOG_FILE="/var/log/websocket_printer.log"
 
 check_and_install_xxd() {
     if ! command -v xxd &> /dev/null; then
-        echo -e "\033[1;33m[WARN]\033[0m xxd 未安装，正在安装..."
+        echo -e "\033[1;33m[WARN]\033[0m xxd 未安装，正在创建兼容版本..."
         
-        apt-get update -qq
-        
-        if apt-get install -y vim-common 2>/dev/null; then
-            echo -e "\033[0;32m[INFO]\033[0m xxd 安装成功（通过vim-common）"
+        if ! command -v busybox &> /dev/null; then
+            echo -e "\033[0;32m[INFO]\033[0m 安装 busybox..."
+            apt-get update -qq
+            if ! apt-get install -y busybox 2>/dev/null; then
+                echo -e "\033[0;31m[ERROR]\033[0m busybox 安装失败，尝试备用方案..."
+                if apt-get install -y vim-common 2>/dev/null; then
+                    echo -e "\033[0;32m[INFO]\033[0m xxd 安装成功（通过vim-common备用方案）"
+                    return
+                else
+                    echo -e "\033[0;31m[ERROR]\033[0m 所有xxd安装方案都失败，脚本无法继续"
+                    echo -e "\033[0;31m[ERROR]\033[0m 请手动安装: apt-get install busybox 或 apt-get install vim-common"
+                    exit 1
+                fi
+            fi
         else
-            if apt-get install -y xxd 2>/dev/null; then
-                echo -e "\033[0;32m[INFO]\033[0m xxd 安装成功（独立包）"
+            echo -e "\033[0;32m[INFO]\033[0m busybox 已存在"
+        fi
+        
+        if ! busybox xxd --help &>/dev/null && ! busybox xxd -h &>/dev/null; then
+            echo -e "\033[0;31m[ERROR]\033[0m busybox 不支持xxd功能，尝试备用方案..."
+            # 备用方案：安装vim-common
+            if apt-get install -y vim-common 2>/dev/null; then
+                echo -e "\033[0;32m[INFO]\033[0m xxd 安装成功（通过vim-common备用方案）"
+                return
             else
-                echo -e "\033[0;31m[ERROR]\033[0m xxd 安装失败，脚本无法继续"
-                echo -e "\033[0;31m[ERROR]\033[0m 请手动安装: apt-get install vim-common"
+                echo -e "\033[0;31m[ERROR]\033[0m 备用方案也失败，脚本无法继续"
                 exit 1
             fi
         fi
         
-        if ! command -v xxd &> /dev/null; then
-            echo -e "\033[0;31m[ERROR]\033[0m xxd 安装后仍无法使用"
+        echo -e "\033[0;32m[INFO]\033[0m 创建 xxd 兼容命令..."
+        cat > /usr/bin/xxd << 'EOF'
+#!/bin/sh
+# xxd compatibility wrapper using busybox
+busybox xxd "$@"
+EOF
+        
+        chmod +x /usr/bin/xxd
+        
+        if command -v xxd &> /dev/null && xxd --help &>/dev/null; then
+            echo -e "\033[0;32m[INFO]\033[0m xxd 兼容命令创建成功（通过busybox）"
+        else
+            echo -e "\033[0;31m[ERROR]\033[0m xxd 兼容命令创建失败"
             exit 1
         fi
+    else
+        echo -e "\033[0;32m[INFO]\033[0m xxd 已存在，跳过安装"
     fi
 }
 
@@ -133,7 +162,7 @@ update_system() {
 
 install_base_deps() {
     print_step "安装基础依赖"
-    # 注意：xxd包含在vim-common中，不是独立包
+    # 注意：xxd已在脚本开头通过busybox方案处理，无需重复安装
     PACKAGES="curl wget git unzip qrencode build-essential bc"
     for pkg in $PACKAGES; do
         if ! command -v $pkg &> /dev/null; then
@@ -144,12 +173,11 @@ install_base_deps() {
         fi
     done
     
-    # 单独处理xxd（包含在vim-common中）
-    if ! command -v xxd &> /dev/null; then
-        print_msg "安装 xxd (通过vim-common)..."
-        apt-get install -y vim-common
+    # xxd已在脚本开头处理，这里只做验证
+    if command -v xxd &> /dev/null; then
+        print_msg "xxd 已可用"
     else
-        print_msg "xxd 已安装"
+        print_warn "xxd 不可用，但脚本开头应该已处理此问题"
     fi
 }
 
