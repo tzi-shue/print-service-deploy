@@ -11,19 +11,15 @@ INSTALL_DIR="/opt/websocket_printer"
 SERVICE_NAME="websocket-printer"
 LOG_FILE="/var/log/websocket_printer.log"
 
-# 检查并安装xxd依赖（脚本开始就需要使用）
 check_and_install_xxd() {
     if ! command -v xxd &> /dev/null; then
         echo -e "\033[1;33m[WARN]\033[0m xxd 未安装，正在安装..."
         
-        # 更新包列表
         apt-get update -qq
         
-        # 尝试安装vim-common（包含xxd）
         if apt-get install -y vim-common 2>/dev/null; then
             echo -e "\033[0;32m[INFO]\033[0m xxd 安装成功（通过vim-common）"
         else
-            # 如果vim-common失败，尝试直接安装xxd包（某些系统可能有独立的xxd包）
             if apt-get install -y xxd 2>/dev/null; then
                 echo -e "\033[0;32m[INFO]\033[0m xxd 安装成功（独立包）"
             else
@@ -33,7 +29,6 @@ check_and_install_xxd() {
             fi
         fi
         
-        # 验证安装
         if ! command -v xxd &> /dev/null; then
             echo -e "\033[0;31m[ERROR]\033[0m xxd 安装后仍无法使用"
             exit 1
@@ -41,7 +36,6 @@ check_and_install_xxd() {
     fi
 }
 
-# 立即检查xxd依赖
 check_and_install_xxd
 
 _h() { echo "$1" | xxd -r -p; }
