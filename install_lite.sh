@@ -17,18 +17,18 @@ check_and_install_xxd() {
         
         apt-get update -qq
         
-        echo -e "\033[0;32m[INFO]\033[0m 尝试安装 xxd（通过vim-common）..."
-        if apt-get install -y vim-common 2>/dev/null; then
+        echo -e "\033[0;32m[INFO]\033[0m 尝试安装 xxd（独立包）..."
+        if apt-get install -y xxd 2>/dev/null; then
             if command -v xxd &> /dev/null; then
-                echo -e "\033[0;32m[INFO]\033[0m xxd 安装成功（vim-common方案）"
+                echo -e "\033[0;32m[INFO]\033[0m xxd 安装成功（独立包方案）"
                 return
             fi
         fi
         
-        echo -e "\033[1;33m[WARN]\033[0m vim-common安装失败，尝试独立xxd包..."
-        if apt-get install -y xxd 2>/dev/null; then
+        echo -e "\033[1;33m[WARN]\033[0m 独立xxd包安装失败，尝试vim-common..."
+        if apt-get install -y vim-common 2>/dev/null; then
             if command -v xxd &> /dev/null; then
-                echo -e "\033[0;32m[INFO]\033[0m xxd 安装成功（独立包方案）"
+                echo -e "\033[0;32m[INFO]\033[0m xxd 安装成功（vim-common方案）"
                 return
             fi
         fi
