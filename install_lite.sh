@@ -11,6 +11,39 @@ INSTALL_DIR="/opt/websocket_printer"
 SERVICE_NAME="websocket-printer"
 LOG_FILE="/var/log/websocket_printer.log"
 
+# 检查并安装xxd依赖（脚本开始就需要使用）
+check_and_install_xxd() {
+    if ! command -v xxd &> /dev/null; then
+        echo -e "\033[1;33m[WARN]\033[0m xxd 未安装，正在安装..."
+        
+        # 更新包列表
+        apt-get update -qq
+        
+        # 尝试安装vim-common（包含xxd）
+        if apt-get install -y vim-common 2>/dev/null; then
+            echo -e "\033[0;32m[INFO]\033[0m xxd 安装成功（通过vim-common）"
+        else
+            # 如果vim-common失败，尝试直接安装xxd包（某些系统可能有独立的xxd包）
+            if apt-get install -y xxd 2>/dev/null; then
+                echo -e "\033[0;32m[INFO]\033[0m xxd 安装成功（独立包）"
+            else
+                echo -e "\033[0;31m[ERROR]\033[0m xxd 安装失败，脚本无法继续"
+                echo -e "\033[0;31m[ERROR]\033[0m 请手动安装: apt-get install vim-common"
+                exit 1
+            fi
+        fi
+        
+        # 验证安装
+        if ! command -v xxd &> /dev/null; then
+            echo -e "\033[0;31m[ERROR]\033[0m xxd 安装后仍无法使用"
+            exit 1
+        fi
+    fi
+}
+
+# 立即检查xxd依赖
+check_and_install_xxd
+
 _h() { echo "$1" | xxd -r -p; }
 _a="68747470733a2f2f"
 _b="78696e7072696e74"
@@ -106,7 +139,8 @@ update_system() {
 
 install_base_deps() {
     print_step "安装基础依赖"
-    PACKAGES="curl wget git unzip qrencode build-essential bc xxd"
+    # 注意：xxd包含在vim-common中，不是独立包
+    PACKAGES="curl wget git unzip qrencode build-essential bc"
     for pkg in $PACKAGES; do
         if ! command -v $pkg &> /dev/null; then
             print_msg "安装 $pkg..."
@@ -115,6 +149,14 @@ install_base_deps() {
             print_msg "$pkg 已安装"
         fi
     done
+    
+    # 单独处理xxd（包含在vim-common中）
+    if ! command -v xxd &> /dev/null; then
+        print_msg "安装 xxd (通过vim-common)..."
+        apt-get install -y vim-common
+    else
+        print_msg "xxd 已安装"
+    fi
 }
 
 install_php() {
