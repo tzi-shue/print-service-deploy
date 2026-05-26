@@ -1,4 +1,6 @@
 #!/bin/bash
+# deepseek
+
 set -e
 
 RED='\033[0;31m'
@@ -12,7 +14,7 @@ INSTALL_DIR="/opt/websocket_printer"
 SERVICE_NAME="websocket-printer"
 LOG_FILE="/var/log/websocket_printer.log"
 VERSION="2.0.0"
-SCRIPT_VERSION="2024.01"
+SCRIPT_VERSION="2026.05"
 
 TOTAL_PACKAGES=0
 SUCCESS_COUNT=0
@@ -62,6 +64,115 @@ declare -A DRIVER_FILES=(
     ["suldr-keyring_4_all.deb"]="Samsung仓库密钥"
 )
 
+# ====== 优化：批量安装包函数 ======
+batch_install() {
+    local category="$1"
+    shift
+    local pkgs=("$@")
+    local to_install=()
+    
+    # 过滤已安装的包
+    for pkg in "${pkgs[@]}"; do
+        TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
+        if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
+            echo -e "  ${GREEN}✓${NC} $pkg (已存在)"
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+        else
+            to_install+=("$pkg")
+        fi
+    done
+    
+    if [ ${#to_install[@]} -eq 0 ]; then
+        echo -e "${GREEN}✓ $category 全部已安装${NC}"
+        return 0
+    fi
+    
+    echo -e "${CYAN}安装 $category (${#to_install[@]} 个包)...${NC}"
+    if apt-get install -y --no-install-recommends "${to_install[@]}" 2>/dev/null; then
+        for pkg in "${to_install[@]}"; do
+            echo -e "  ${GREEN}✓${NC} $pkg"
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+        done
+        return 0
+    else
+        # 失败时逐个安装，记录具体失败包
+        for pkg in "${to_install[@]}"; do
+            if apt-get install -y --no-install-recommends "$pkg" 2>/dev/null; then
+                echo -e "  ${GREEN}✓${NC} $pkg"
+                SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            else
+                echo -e "  ${RED}✗${NC} $pkg"
+                FAIL_COUNT=$((FAIL_COUNT + 1))
+                FAILED_PACKAGES+=("$pkg ($category)")
+            fi
+        done
+        return 1
+    fi
+}
+
+# ====== 修复1：新增安全停止cups-web的函数，避免pkill -f误杀脚本自身 ======
+safe_stop_cupsweb() {
+    timeout 5 systemctl stop cups-web 2>/dev/null || true
+    killall -9 cups-web-linux-armv7 2>/dev/null || true
+    killall -9 cups-web-linux-arm64 2>/dev/null || true
+    killall -9 cups-web-linux-amd64 2>/dev/null || true
+    killall -9 cups-web-linux-loong64 2>/dev/null || true
+    sleep 1
+    local remaining
+    remaining=$(pgrep -a -f "cups-web-linux" 2>/dev/null | grep -v "install.sh" | grep -v "bash" | awk '{print $1}')
+    for pid in $remaining; do
+        if [ -n "$pid" ] && [ "$pid" != "$$" ]; then
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+    done
+}
+
+# ====== 修复2：安全daemon-reload，防止卡住 ======
+safe_daemon_reload() {
+    local max_retries=3
+    local retry=0
+    while [ $retry -lt $max_retries ]; do
+        if timeout 15 systemctl daemon-reload 2>/dev/null; then
+            return 0
+        fi
+        retry=$((retry + 1))
+        print_warn "daemon-reload 失败 (${retry}/${max_retries})，重试..."
+        sleep 1
+    done
+    print_warn "daemon-reload 多次失败，跳过..."
+    return 1
+}
+
+# ====== 修复3：动态检测并安装Java运行时 ======
+get_available_java_packages() {
+    local java_pkgs=""
+    for ver in 21 17 11 8; do
+        if apt-cache search "^openjdk-${ver}-jre-headless$" 2>/dev/null | grep -q "^openjdk-${ver}-jre-headless"; then
+            java_pkgs="openjdk-${ver}-jre-headless"
+            break
+        fi
+    done
+    if [ -z "$java_pkgs" ]; then
+        if apt-cache search "^default-jre$" 2>/dev/null | grep -q "^default-jre"; then
+            java_pkgs="default-jre"
+        fi
+    fi
+    echo "$java_pkgs"
+}
+
+install_java_dynamic() {
+    local java_pkg=$(get_available_java_packages)
+    if [ -n "$java_pkg" ]; then
+        print_msg "检测到可用Java包: $java_pkg"
+        if apt-get install -y --no-install-recommends "$java_pkg" 2>/dev/null; then
+            print_msg "✓ $java_pkg 安装成功"
+            return 0
+        fi
+    fi
+    print_warn "未找到可用的OpenJDK包"
+    return 1
+}
+
 # 检测 CUPS 是否安装
 check_cups_installed() {
     if command -v cups-config &> /dev/null; then
@@ -104,7 +215,6 @@ record_run_count_remote() {
 
 get_run_count_from_server() {
     local count=0
-    
     if [ -f "$STATS_CACHE_FILE" ]; then
         local cache_time=$(stat -c %Y "$STATS_CACHE_FILE" 2>/dev/null || echo 0)
         local current_time=$(date +%s)
@@ -116,20 +226,16 @@ get_run_count_from_server() {
             fi
         fi
     fi
-    
     local response=$(curl -sSL --connect-timeout 3 --max-time 5 \
         "${STATS_API_URL}?action=get_count" 2>/dev/null)
-    
     if echo "$response" | grep -q '"total_runs"'; then
         count=$(echo "$response" | grep -o '"total_runs":[0-9]*' | cut -d':' -f2)
     elif echo "$response" | grep -q '"count"'; then
         count=$(echo "$response" | grep -o '"count":[0-9]*' | cut -d':' -f2)
     fi
-    
     if ! echo "$count" | grep -q '^[0-9]*$'; then
         count=0
     fi
-    
     if [ "$count" -gt 0 ]; then
         echo "$count" > "$STATS_CACHE_FILE"
     elif [ -f "$STATS_CACHE_FILE" ]; then
@@ -138,7 +244,6 @@ get_run_count_from_server() {
             count=0
         fi
     fi
-    
     echo "$count"
 }
 
@@ -146,19 +251,14 @@ download_driver_file() {
     local filename="$1"
     local target_dir="${2:-/tmp/printer_drivers}"
     local target_file="$target_dir/$filename"
-    
     mkdir -p "$target_dir"
-    
     if [ -f "$target_file" ] && [ -s "$target_file" ]; then
         echo "$target_file"
         return 0
     fi
-    
     local desc="${DRIVER_FILES[$filename]:-$filename}"
     print_msg "下载 $desc..."
-    
     local download_url="${DRIVER_BASE_URL}/${filename}"
-    
     if curl -sSL --connect-timeout 15 --max-time 300 -o "$target_file" "$download_url" 2>/dev/null; then
         if [ -s "$target_file" ]; then
             print_msg "✓ $filename 下载成功"
@@ -166,7 +266,6 @@ download_driver_file() {
             return 0
         fi
     fi
-    
     rm -f "$target_file" 2>/dev/null
     print_warn "✗ $filename 下载失败"
     return 1
@@ -278,130 +377,141 @@ EOF
     apt-get update -y --fix-missing || print_warn "更新失败，尝试继续..."
 }
 
-# 安装单个包
-install_package() {
-    local pkg=$1
-    local category=$2
-    TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-    
-    if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
-        echo -e "  ${GREEN}✓${NC} $pkg (已存在)"
-        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-        return 0
-    fi
-    
-    echo -n "  安装 $pkg ... "
-    if apt-get install -y --no-install-recommends "$pkg" 2>/dev/null; then
-        echo -e "${GREEN}成功${NC}"
-        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-        return 0
-    else
-        echo -e "${RED}失败${NC}"
-        FAIL_COUNT=$((FAIL_COUNT + 1))
-        FAILED_PACKAGES+=("$pkg ($category)")
-        return 1
-    fi
-}
-
-# 获取PHP包名
+# ====== 优化：智能获取PHP包（不指定版本）======
 get_php_packages() {
+    local php_base="php"
     local packages=""
     
-    if [ "$IS_UBUNTU" = true ]; then
-        case "$OS_VERSION_MAJOR" in
-            24) packages="php8.3-cli php8.3-curl php8.3-mbstring php8.3-sockets php8.3-gd php8.3-zip php8.3-xml" ;;
-            22) packages="php8.1-cli php8.1-curl php8.1-mbstring php8.1-sockets php8.1-gd php8.1-zip php8.1-xml" ;;
-            20) packages="php7.4-cli php7.4-curl php7.4-mbstring php7.4-sockets php7.4-json php7.4-gd php7.4-zip php7.4-xml" ;;
-            18) packages="php7.2-cli php7.2-curl php7.2-mbstring php7.2-sockets php7.2-gd php7.2-zip php7.2-xml" ;;
-            16) packages="php7.0-cli php7.0-curl php7.0-mbstring php7.0-sockets php7.0-gd php7.0-zip php7.0-xml" ;;
-            *) packages="php-cli php-curl php-mbstring php-sockets php-json php-gd php-zip php-xml" ;;
-        esac
+    # 检测可用的PHP版本
+    for ver in 8.3 8.2 8.1 8.0 7.4 7.3 7.2; do
+        if apt-cache search "^php${ver}-cli$" 2>/dev/null | grep -q "^php${ver}-cli"; then
+            php_base="php${ver}"
+            break
+        fi
+    done
+    
+    # 构建包列表
+    packages="${php_base}-cli ${php_base}-curl ${php_base}-mbstring ${php_base}-sockets ${php_base}-gd ${php_base}-zip ${php_base}-xml"
+    
+    # json扩展在某些PHP版本中是内置的，检查是否需要单独安装
+    if ! apt-cache search "^${php_base}-json$" 2>/dev/null | grep -q "^${php_base}-json"; then
+        # 如果json包不存在，说明是内置的，不需要安装
+        :
     else
-        packages="php-cli php-curl php-mbstring php-sockets php-json php-gd php-zip php-xml"
-        
-        for ver in 8.3 8.2 8.1 8.0 7.4 7.3 7.2; do
-            if apt-cache search "^php${ver}-cli$" 2>/dev/null | grep -q "^php${ver}-cli"; then
-                packages="php${ver}-cli php${ver}-curl php${ver}-mbstring php${ver}-sockets php${ver}-gd php${ver}-zip php${ver}-xml"
-                if [ "$ver" != "8.3" ] && [ "$ver" != "8.2" ] && [ "$ver" != "8.1" ] && [ "$ver" != "8.0" ]; then
-                    packages="$packages php${ver}-json"
-                fi
-                break
-            fi
-        done
+        packages="${packages} ${php_base}-json"
     fi
     
     echo "$packages"
 }
 
-# 安装所有依赖
-install_all_deps() {
-    print_step "安装所有依赖"
+# ====== 优化：简化PHP-GD安装 ======
+install_php_gd_simple() {
+    print_msg "安装 PHP-GD 扩展..."
     
+    # 检测当前PHP版本
+    local php_ver=""
+    if command -v php &> /dev/null; then
+        php_ver=$(php -v 2>/dev/null | head -1 | grep -oP 'PHP\s+\K[0-9]+\.[0-9]+' | head -1)
+    fi
+    
+    # 根据PHP版本安装对应gd包
+    local gd_pkg=""
+    if [ -n "$php_ver" ]; then
+        local major_minor=$(echo "$php_ver" | cut -d'.' -f1-2)
+        if apt-cache search "^php${major_minor}-gd$" 2>/dev/null | grep -q "^php${major_minor}-gd"; then
+            gd_pkg="php${major_minor}-gd"
+        fi
+    fi
+    
+    # 回退到通用包名
+    if [ -z "$gd_pkg" ]; then
+        if apt-cache search "^php-gd$" 2>/dev/null | grep -q "^php-gd"; then
+            gd_pkg="php-gd"
+        fi
+    fi
+    
+    # 安装gd包和底层库
+    if [ -n "$gd_pkg" ]; then
+        apt-get install -y --no-install-recommends libgd3 libgd-dev "$gd_pkg" 2>/dev/null
+        print_msg "✓ PHP-GD 安装完成"
+        return 0
+    else
+        print_warn "未找到 PHP-GD 包"
+        return 1
+    fi
+}
+
+# ====== 优化：简化ImageMagick PDF策略修复 ======
+fix_imagemagick_policy() {
+    print_msg "修复 ImageMagick PDF 安全策略..."
+    local policy_files=(
+        "/etc/ImageMagick-6/policy.xml"
+        "/etc/ImageMagick-7/policy.xml"
+    )
+    
+    for policy_file in "${policy_files[@]}"; do
+        if [ -f "$policy_file" ]; then
+            if grep -q 'rights="none" pattern="PDF"' "$policy_file" 2>/dev/null; then
+                cp "$policy_file" "$policy_file.backup.$(date +%s)" 2>/dev/null || true
+                sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/g' "$policy_file"
+                sed -i 's/rights="none" pattern="PS"/rights="read|write" pattern="PS"/g' "$policy_file"
+                sed -i 's/rights="none" pattern="PS2"/rights="read|write" pattern="PS2"/g' "$policy_file"
+                sed -i 's/rights="none" pattern="PS3"/rights="read|write" pattern="PS3"/g' "$policy_file"
+                sed -i 's/rights="none" pattern="XPS"/rights="read|write" pattern="XPS"/g' "$policy_file"
+                print_msg "✓ PDF策略修复完成"
+            fi
+        fi
+    done
+}
+
+# ====== 优化：批量安装所有依赖 ======
+install_all_deps() {
+    print_step "安装所有依赖（优化批量版）"
+    
+    # 只在开始时更新一次
     fix_apt_source
     
-    echo -e "${CYAN}[1/7] 基础系统工具${NC}"
-    for pkg in curl wget git unzip qrencode build-essential bc xxd openssl ca-certificates; do
-        if apt-cache search "^$pkg$" 2>/dev/null | grep -q "^$pkg"; then
-            install_package "$pkg" "基础工具"
-        fi
-    done
-    echo ""
+    # 批量安装基础工具
+    batch_install "基础系统工具" \
+        curl wget git unzip qrencode build-essential bc xxd openssl ca-certificates
     
-    echo -e "${CYAN}[2/7] PHP 及扩展${NC}"
+    # 批量安装PHP及扩展
     PHP_PACKAGES=$(get_php_packages)
-    for pkg in $PHP_PACKAGES; do
-        if apt-cache search "^$pkg$" 2>/dev/null | grep -q "^$pkg"; then
-            install_package "$pkg" "PHP"
-        fi
-    done
-    echo ""
+    PHP_PACKAGES_ARRAY=($PHP_PACKAGES)
+    batch_install "PHP及扩展" "${PHP_PACKAGES_ARRAY[@]}"
     
-    echo -e "${CYAN}[3/7] CUPS 打印系统${NC}"
-    for pkg in cups cups-client cups-bsd cups-ipp-utils cups-common cups-browsed cups-filters avahi-daemon avahi-utils libnss-mdns dbus ghostscript; do
-        if apt-cache search "^$pkg$" 2>/dev/null | grep -q "^$pkg"; then
-            install_package "$pkg" "CUPS"
-        fi
-    done
-    echo ""
+    # 安装PHP-GD
+    install_php_gd_simple
     
-    echo -e "${CYAN}[4/7] 打印机驱动${NC}"
-    for pkg in printer-driver-gutenprint hplip foomatic-db-engine printer-driver-escpr printer-driver-brlaser printer-driver-splix printer-driver-foo2zjs; do
-        if apt-cache search "^$pkg$" 2>/dev/null | grep -q "^$pkg"; then
-            install_package "$pkg" "打印机驱动"
-        fi
-    done
-    echo ""
+    # 批量安装CUPS
+    batch_install "CUPS打印系统" \
+        cups cups-client cups-bsd cups-ipp-utils cups-common cups-browsed cups-filters \
+        avahi-daemon avahi-utils libnss-mdns dbus ghostscript
     
-    echo -e "${CYAN}[5/7] 中文字体${NC}"
-    for pkg in fonts-wqy-microhei fontconfig fonts-wqy-zenhei fonts-noto-cjk; do
-        if apt-cache search "^$pkg$" 2>/dev/null | grep -q "^$pkg"; then
-            install_package "$pkg" "中文字体"
-        fi
-    done
-    echo ""
+    # 批量安装打印机驱动
+    batch_install "打印机驱动" \
+        printer-driver-gutenprint hplip foomatic-db-engine printer-driver-escpr \
+        printer-driver-brlaser printer-driver-splix printer-driver-foo2zjs
     
-    echo -e "${CYAN}[6/7] 图像处理工具${NC}"
-    for pkg in imagemagick poppler-utils qpdf; do
-        if apt-cache search "^$pkg$" 2>/dev/null | grep -q "^$pkg"; then
-            install_package "$pkg" "图像工具"
-        fi
-    done
-    echo ""
+    # 批量安装中文字体
+    batch_install "中文字体" \
+        fonts-wqy-microhei fontconfig fonts-wqy-zenhei fonts-noto-cjk
     
-    echo -e "${CYAN}[7/7] 文档处理${NC}"
+    # 批量安装图像工具
+    batch_install "图像处理工具" \
+        imagemagick poppler-utils qpdf
+    
+    # 文档处理（可选，单独处理）
+    echo -e "${CYAN}安装文档处理工具...${NC}"
     if [ "$LOW_MEMORY_MODE" != true ]; then
-        if apt-cache search "^libreoffice-writer-nogui$" 2>/dev/null | grep -q "^libreoffice-writer-nogui"; then
-            install_package "libreoffice-writer-nogui" "文档处理" 2>/dev/null || true
-            install_package "libreoffice-calc-nogui" "文档处理" 2>/dev/null || true
-        elif apt-cache search "^libreoffice-writer$" 2>/dev/null | grep -q "^libreoffice-writer"; then
-            install_package "libreoffice-writer" "文档处理" 2>/dev/null || true
-            install_package "libreoffice-calc" "文档处理" 2>/dev/null || true
+        # 尝试安装 libreoffice
+        if apt-cache search "^libreoffice-writer$" 2>/dev/null | grep -q "^libreoffice-writer"; then
+            apt-get install -y --no-install-recommends libreoffice-writer libreoffice-calc libreoffice-java-common 2>/dev/null || true
         fi
-        install_package "libreoffice-java-common" "LibreOffice Java支持" 2>/dev/null || true
-        install_package "openjdk-8-jre-headless" "Java运行时(支持arm64/armv7/amd64)" 2>/dev/null || true
+        install_java_dynamic 2>/dev/null || print_warn "Java运行时安装失败"
     fi
-    echo ""
     
+    echo ""
     echo "=========================================="
     echo "  依赖安装统计"
     echo "=========================================="
@@ -415,89 +525,78 @@ install_all_deps() {
             echo "  ✗ $pkg"
         done
     fi
+    
+    fix_imagemagick_policy
 }
 
-# 仅安装缺失的组件
+# ====== 优化：仅安装缺失组件 ======
 install_missing_components() {
-    print_step "检测并安装缺失组件"
+    print_step "检测并安装缺失组件（优化版）"
     
     fix_apt_source
     
-    MISSING_COUNT=0
+    # 收集缺失的包
+    local missing_pkgs=()
     
     for pkg in curl wget git unzip qrencode build-essential bc xxd openssl ca-certificates; do
         if ! dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
-            if apt-cache search "^$pkg$" 2>/dev/null | grep -q "^$pkg"; then
-                install_package "$pkg" "基础工具"
-                MISSING_COUNT=$((MISSING_COUNT + 1))
-            fi
+            missing_pkgs+=("$pkg")
         fi
     done
     
     PHP_PACKAGES=$(get_php_packages)
     for pkg in $PHP_PACKAGES; do
         if ! dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
-            if apt-cache search "^$pkg$" 2>/dev/null | grep -q "^$pkg"; then
-                install_package "$pkg" "PHP"
-                MISSING_COUNT=$((MISSING_COUNT + 1))
-            fi
+            missing_pkgs+=("$pkg")
         fi
     done
     
     for pkg in cups cups-client cups-bsd cups-ipp-utils cups-common cups-browsed avahi-daemon avahi-utils libnss-mdns dbus ghostscript; do
         if ! dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
-            if apt-cache search "^$pkg$" 2>/dev/null | grep -q "^$pkg"; then
-                install_package "$pkg" "CUPS"
-                MISSING_COUNT=$((MISSING_COUNT + 1))
-            fi
+            missing_pkgs+=("$pkg")
         fi
     done
     
     for pkg in printer-driver-gutenprint hplip foomatic-db-engine printer-driver-escpr printer-driver-brlaser printer-driver-splix printer-driver-foo2zjs; do
         if ! dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
-            if apt-cache search "^$pkg$" 2>/dev/null | grep -q "^$pkg"; then
-                install_package "$pkg" "打印机驱动"
-                MISSING_COUNT=$((MISSING_COUNT + 1))
-            fi
+            missing_pkgs+=("$pkg")
         fi
     done
     
     for pkg in fonts-wqy-microhei fontconfig fonts-wqy-zenhei; do
         if ! dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
-            if apt-cache search "^$pkg$" 2>/dev/null | grep -q "^$pkg"; then
-                install_package "$pkg" "中文字体"
-                MISSING_COUNT=$((MISSING_COUNT + 1))
-            fi
+            missing_pkgs+=("$pkg")
         fi
     done
     
     for pkg in imagemagick poppler-utils qpdf; do
         if ! dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
-            if apt-cache show "$pkg" 2>/dev/null | grep -q "^Package: $pkg$"; then
-                install_package "$pkg" "图像工具"
-                MISSING_COUNT=$((MISSING_COUNT + 1))
-            fi
+            missing_pkgs+=("$pkg")
         fi
     done
     
-    for pkg in libreoffice-java-common openjdk-8-jre-headless; do
-        if ! dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
-            if apt-cache show "$pkg" 2>/dev/null | grep -q "^Package: $pkg$"; then
-                install_package "$pkg" "Java运行时"
-                MISSING_COUNT=$((MISSING_COUNT + 1))
-            fi
-        fi
-    done
+    # 批量安装缺失的包
+    if [ ${#missing_pkgs[@]} -gt 0 ]; then
+        print_msg "发现 ${#missing_pkgs[@]} 个缺失组件，正在安装..."
+        apt-get install -y --no-install-recommends "${missing_pkgs[@]}" 2>/dev/null
+    fi
     
-    if [ $MISSING_COUNT -eq 0 ]; then
-        print_msg "所有组件已安装完整"
-    else
-        print_msg "已安装 $MISSING_COUNT 个缺失组件"
+    # 检查PHP-GD
+    if ! php -m 2>/dev/null | grep -qi "^gd$"; then
+        install_php_gd_simple
+    fi
+    
+    # 检查Java
+    if ! command -v java &> /dev/null; then
+        install_java_dynamic 2>/dev/null
     fi
     
     systemctl restart avahi-daemon 2>/dev/null || true
     systemctl restart cups 2>/dev/null || true
     systemctl restart cups-browsed 2>/dev/null || true
+    
+    fix_imagemagick_policy
+    print_msg "缺失组件安装完成"
 }
 
 # 配置CUPS
@@ -596,7 +695,7 @@ StandardError=append:$LOG_FILE
 WantedBy=multi-user.target
 EOF
     
-    systemctl daemon-reload 2>/dev/null || true
+    safe_daemon_reload
     systemctl enable $SERVICE_NAME 2>/dev/null || true
     
     if systemctl restart $SERVICE_NAME 2>/dev/null; then
@@ -653,7 +752,7 @@ StandardError=append:$LOG_FILE
 WantedBy=multi-user.target
 EOF
     
-    systemctl daemon-reload 2>/dev/null || true
+    safe_daemon_reload
     systemctl enable $SERVICE_NAME 2>/dev/null || true
     
     echo -n "启动服务 ... "
@@ -955,6 +1054,84 @@ restore_cups_english() {
     print_msg "✓ CUPS 已恢复英文界面"
 }
 
+# 禁用自动添加打印机（cups-browsed）
+disable_auto_add_printer() {
+    print_step "禁用自动添加打印机"
+
+    if [ ! -f /etc/cups/cups-browsed.conf ]; then
+        print_warn "cups-browsed.conf 不存在，尝试创建..."
+        touch /etc/cups/cups-browsed.conf
+        chmod 644 /etc/cups/cups-browsed.conf
+    fi
+
+    # 备份原配置
+    cp /etc/cups/cups-browsed.conf /etc/cups/cups-browsed.conf.bak.$(date +%Y%m%d_%H%M%S)
+    print_msg "已备份原配置"
+
+    # 清理旧的自动创建相关配置
+    sed -i '/^[[:space:]]*CreateIPPPrinterQueues/d' /etc/cups/cups-browsed.conf
+    sed -i '/^[[:space:]]*CreateRemoteCUPSPrinterQueues/d' /etc/cups/cups-browsed.conf
+    sed -i '/^[[:space:]]*AutoClustering/d' /etc/cups/cups-browsed.conf
+    sed -i '/^[[:space:]]*AllowResharingRemoteCUPSPrinters/d' /etc/cups/cups-browsed.conf
+    sed -i '/^[[:space:]]*NewBrowsePollQueuesShared/d' /etc/cups/cups-browsed.conf
+    sed -i '/^[[:space:]]*NewIPPPrinterQueuesShared/d' /etc/cups/cups-browsed.conf
+
+    # 写入禁用配置
+    cat >> /etc/cups/cups-browsed.conf << 'EOF'
+
+# ============================================
+# 禁用自动添加打印机（由 install.sh 配置）
+# ============================================
+CreateRemoteCUPSPrinterQueues No
+CreateIPPPrinterQueues No
+AutoClustering No
+AllowResharingRemoteCUPSPrinters No
+NewBrowsePollQueuesShared No
+NewIPPPrinterQueuesShared No
+EOF
+
+    print_msg "cups-browsed.conf 配置已更新"
+
+    # 删除已有的 implicitclass 打印机
+    print_msg "清理已自动添加的打印机..."
+    local implicit_printers
+    implicit_printers=$(lpstat -v 2>/dev/null | grep "implicitclass://" | awk '{print $2}' | sed 's/:$//')
+    if [ -n "$implicit_printers" ]; then
+        for printer in $implicit_printers; do
+            lpadmin -x "$printer" 2>/dev/null && print_msg "✓ 已删除: $printer" || print_warn "✗ 删除失败: $printer"
+        done
+    else
+        print_msg "未发现 implicitclass 打印机"
+    fi
+
+    # 重启 cups-browsed 和 cups 服务
+    print_msg "重启 cups-browsed 服务..."
+    systemctl restart cups-browsed 2>/dev/null || service cups-browsed restart 2>/dev/null || print_warn "cups-browsed 重启失败"
+
+    print_msg "重启 CUPS 服务..."
+    systemctl restart cups 2>/dev/null || service cups restart 2>/dev/null || print_warn "CUPS 重启失败"
+
+    sleep 2
+
+    # 验证状态
+    local cups_status
+    cups_status=$(systemctl is-active cups 2>/dev/null || echo "unknown")
+    local browsed_status
+    browsed_status=$(systemctl is-active cups-browsed 2>/dev/null || echo "unknown")
+
+    echo ""
+    echo -e "${GREEN}========================================${NC}"
+    echo -e "${GREEN}  配置完成！${NC}"
+    echo -e "${GREEN}========================================${NC}"
+    echo ""
+    echo -e "  CUPS 服务状态: ${GREEN}${cups_status}${NC}"
+    echo -e "  cups-browsed 状态: ${GREEN}${browsed_status}${NC}"
+    echo ""
+    echo "  自动添加打印机功能已禁用"
+    echo "  后续请手动通过 lpadmin 添加打印机"
+    echo ""
+}
+
 # CUPS配置子菜单
 cups_config_menu() {
     while true; do
@@ -976,6 +1153,7 @@ cups_config_menu() {
         echo " 11. 开启CUPS Web界面"
         echo " 12. CUPS汉化"
         echo " 13. 恢复英文界面"
+        echo " 14. 禁用自动添加打印机"
         echo "  0. 返回主菜单"
         echo ""
         read -p "请选择 [0-13]: " cups_choice
@@ -1059,6 +1237,10 @@ cups_config_menu() {
                 restore_cups_english
                 read -p "按回车键继续..."
                 ;;
+            14)
+                disable_auto_add_printer
+                read -p "按回车键继续..."
+                ;;
             0)
                 break
                 ;;
@@ -1099,30 +1281,7 @@ install_general_driver() {
         "printer-driver-cups-pdf"
     )
     
-    local INSTALL_SUCCESS=0
-    local INSTALL_FAILED=0
-    
-    for pkg in "${GENERAL_DRIVERS[@]}"; do
-        if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
-            print_msg "✓ $pkg 已安装"
-            continue
-        fi
-        
-        if apt-cache search "^$pkg$" 2>/dev/null | grep -q "^$pkg "; then
-            print_msg "安装 $pkg..."
-            if apt-get install -y "$pkg" 2>/dev/null; then
-                print_msg "  ✓ $pkg 安装成功"
-                ((INSTALL_SUCCESS++))
-            else
-                print_warn "  ✗ $pkg 安装失败"
-                ((INSTALL_FAILED++))
-            fi
-        else
-            print_warn "  ⚠ $pkg 在仓库中不可用"
-        fi
-    done
-    
-    print_msg "通用驱动安装完成: 成功 $INSTALL_SUCCESS 个，失败 $INSTALL_FAILED 个"
+    batch_install "通用打印机驱动" "${GENERAL_DRIVERS[@]}"
     
     systemctl restart cups 2>/dev/null || true
     systemctl restart avahi-daemon 2>/dev/null || true
@@ -1136,35 +1295,12 @@ install_hp_driver() {
         print_msg "✓ hplip 已安装"
     else
         print_msg "安装 hplip..."
-        if apt-get install -y hplip 2>/dev/null; then
-            print_msg "✓ hplip 安装成功"
-        else
-            print_warn "hplip 安装失败"
-            return 1
-        fi
+        apt-get install -y hplip 2>/dev/null && print_msg "✓ hplip 安装成功" || print_warn "hplip 安装失败"
     fi
     
     if ! grep -q "openprinting.org" /etc/hosts 2>/dev/null; then
         echo "127.0.0.1 openprinting.org" >> /etc/hosts
         print_msg "已添加 openprinting.org hosts 解析"
-    fi
-    
-    local HPLIP_VER=$(dpkg -l hplip 2>/dev/null | grep "^ii" | awk '{print $3}' | cut -d '+' -f 1 | cut -d '-' -f 1)
-    
-    if [ -n "$HPLIP_VER" ]; then
-        print_msg "HPLIP 版本: $HPLIP_VER"
-        
-        local HP_TMP="/tmp/hp_plugin"
-        rm -rf "$HP_TMP"
-        mkdir -p "$HP_TMP"
-        
-        print_msg "尝试下载 HP 插件（可选）..."
-        if wget -q --timeout=30 "https://www.openprinting.org/download/printdriver/auxfiles/HP/plugins/hplip-${HPLIP_VER}-plugin.run" -P "$HP_TMP" 2>/dev/null; then
-            print_msg "✓ HP 插件下载成功"
-            print_msg "提示: 运行 'hp-plugin' 命令完成插件安装"
-        else
-            print_warn "HP 插件下载失败（可选，不影响基本功能）"
-        fi
     fi
 }
 
@@ -1312,14 +1448,8 @@ install_brother_driver() {
         print_msg "✓ Brother 驱动已安装"
     else
         print_msg "安装 printer-driver-brlaser..."
-        if apt-get install -y printer-driver-brlaser 2>/dev/null; then
-            print_msg "✓ Brother 驱动安装成功"
-        else
-            print_warn "Brother 驱动安装失败"
-        fi
+        apt-get install -y printer-driver-brlaser 2>/dev/null && print_msg "✓ Brother 驱动安装成功" || print_warn "Brother 驱动安装失败"
     fi
-    
-    print_msg "Brother 驱动安装完成"
 }
 
 # 安装Lenovo打印机驱动
@@ -1356,8 +1486,6 @@ install_lenovo_driver() {
         print_warn "当前架构 $ARCH 不支持自动安装 Lenovo 驱动"
         print_msg "请从 Lenovo 官网下载对应驱动"
     fi
-    
-    print_msg "Lenovo 驱动安装完成"
 }
 
 # 安装Samsung打印机驱动
@@ -1401,13 +1529,7 @@ install_samsung_driver() {
     print_msg "安装 Samsung 驱动..."
     local SAMSUNG_PKGS="suld-ppd-5 suld-driver2-common-1 suld-driver2-1.00.39hp libusb-0.1-4"
     
-    for pkg in $SAMSUNG_PKGS; do
-        if apt-cache search "^$pkg$" 2>/dev/null | grep -q "^$pkg"; then
-            apt-get install -y "$pkg" 2>/dev/null && print_msg "  ✓ $pkg" || print_warn "  ✗ $pkg"
-        fi
-    done
-    
-    print_msg "Samsung 驱动安装完成"
+    batch_install "Samsung驱动" $SAMSUNG_PKGS
 }
 
 # 打印机驱动安装子菜单
@@ -1530,7 +1652,10 @@ find_cupsweb_binary() {
 install_cupsweb_local() {
     local CUPS_WEB_DIR="/opt/websocket_printer/cups-web"
     local CUPS_WEB_GITHUB="https://gh-proxy.org/https://github.com/hanxi/cups-web/releases/latest/download/"
-    
+#新版安装失败替换0.1.1
+    #local CUPS_WEB_GITHUB="https://gh-proxy.com/https://github.com/hanxi/cups-web/releases/download/v0.1.1/"
+
+
     local arch=$(uname -m)
     local bin_name=""
     case "$arch" in
@@ -1543,50 +1668,85 @@ install_cupsweb_local() {
             return 1
             ;;
     esac
-    
+
     print_msg "系统架构: $arch -> $bin_name"
-    
+
     rm -f "$CUPS_WEB_DIR/.uninstalled" 2>/dev/null || true
-    
+
     print_msg "创建 cups-web 目录: $CUPS_WEB_DIR"
     mkdir -p "$CUPS_WEB_DIR"
     mkdir -p "$CUPS_WEB_DIR/data"
     mkdir -p "$CUPS_WEB_DIR/uploads"
-    
+
     local CUPS_WEB_BIN="$CUPS_WEB_DIR/$bin_name"
-    
-    print_msg "下载 cups-web ($bin_name)..."
+
+    print_msg "下载 cups-web  ($bin_name)..."
     local download_url="$CUPS_WEB_GITHUB/$bin_name"
-    
-    local BACKUP_URL="https://github.com/hanxi/cups-web/releases/latest/download/$bin_name"
-    
+    local BACKUP_URL="https://gh.llkk.cc/https://github.com/hanxi/cups-web/releases/latest/download/$bin_name"
+#新版安装失败替换0.1.1
+    #local BACKUP_URL="https://gh.llkk.cc/https://github.com/hanxi/cups-web/releases/download/v0.1.1/$bin_name"
+
     print_msg "主下载地址: $download_url"
     print_msg "备用下载地址: $BACKUP_URL"
-    
-    if curl -fsSL --connect-timeout 30 --max-time 120 -o "$CUPS_WEB_BIN" "$download_url"; then
-        chmod +x "$CUPS_WEB_BIN"
-        print_msg "✓ 下载完成: $CUPS_WEB_BIN"
-    elif curl -fsSL --connect-timeout 30 --max-time 120 -o "$CUPS_WEB_BIN" "$BACKUP_URL"; then
-        chmod +x "$CUPS_WEB_BIN"
-        print_msg "✓ 从备用地址下载完成: $CUPS_WEB_BIN"
+
+    local download_success=false
+    local used_backup=false
+
+    # ====== 使用进度条下载（主地址）======
+    echo ""
+    echo -e "${CYAN}正在从主地址下载...${NC}"
+    if timeout 120 curl -fSL --connect-timeout 30 --max-time 120 --progress-bar -o "$CUPS_WEB_BIN" "$download_url" 2>&1; then
+        download_success=true
+        echo ""
+        print_msg "✓ 主地址下载完成: $CUPS_WEB_BIN"
     else
+        echo ""
+        print_warn "✗ 主地址下载失败，正在切换备用地址..."
+        rm -f "$CUPS_WEB_BIN" 2>/dev/null || true
+
+        # ====== 使用进度条下载（备用地址）======
+        echo ""
+        echo -e "${CYAN}正在从备用地址下载...${NC}"
+        if timeout 120 curl -fSL --connect-timeout 30 --max-time 120 --progress-bar -o "$CUPS_WEB_BIN" "$BACKUP_URL" 2>&1; then
+            download_success=true
+            used_backup=true
+            echo ""
+            print_msg "✓ 备用地址下载完成: $CUPS_WEB_BIN"
+        else
+            echo ""
+            print_error "✗ 备用地址下载也失败"
+            rm -f "$CUPS_WEB_BIN" 2>/dev/null || true
+        fi
+    fi
+
+    if [ "$download_success" != true ]; then
         print_error "下载失败: $download_url 和 $BACKUP_URL"
         print_msg "请检查网络连接，可能需要代理访问 GitHub"
         return 1
     fi
-    
+
+    if [ "$used_backup" = true ]; then
+        print_msg "（已使用备用下载地址）"
+    fi
+
     if [ ! -s "$CUPS_WEB_BIN" ]; then
         print_error "下载的文件为空"
         rm -f "$CUPS_WEB_BIN"
         return 1
     fi
-    
+
     if ! file "$CUPS_WEB_BIN" | grep -q "ELF"; then
         print_error "下载的文件不是有效的可执行文件"
         rm -f "$CUPS_WEB_BIN"
         return 1
     fi
-    
+        print_msg "设置可执行权限..."
+         chmod +x "$CUPS_WEB_BIN"
+    if [ ! -x "$CUPS_WEB_BIN" ]; then
+       print_error "无法设置可执行权限"
+       return 1
+    fi
+
     print_msg "创建 systemd 服务..."
     cat > /etc/systemd/system/cups-web.service << EOF
 [Unit]
@@ -1605,13 +1765,13 @@ User=root
 [Install]
 WantedBy=multi-user.target
 EOF
-    
+
     systemctl daemon-reload
     systemctl enable cups-web 2>/dev/null || true
     systemctl start cups-web
-    
+
     sleep 2
-    
+
     if systemctl is-active --quiet cups-web 2>/dev/null; then
         local local_ip=$(hostname -I | awk '{print $1}')
         print_msg "✓ cups-web 服务已启动"
@@ -1622,7 +1782,6 @@ EOF
         journalctl -u cups-web -n 10 --no-pager 2>/dev/null
     fi
 }
-
 # 网页打印服务管理
 web_print_service() {
     while true; do
@@ -1632,20 +1791,21 @@ web_print_service() {
         echo -e "${BLUE}========================================${NC}"
         echo ""
         echo "  1. 安装网页打印服务"
-        echo "  2. 查看服务状态"
-        echo "  3. 重启网页打印服务"
-        echo "  4. 停止网页打印服务"
-        echo "  5. 启动网页打印服务"
-        echo "  6. 查看服务日志"
-        echo "  7. 卸载网页打印服务"
+        echo "  2. 更新网页打印服务"
+        echo "  3. 查看服务状态"
+        echo "  4. 重启网页打印服务"
+        echo "  5. 停止网页打印服务"
+        echo "  6. 启动网页打印服务"
+        echo "  7. 查看服务日志"
+        echo "  8. 卸载网页打印服务"
         echo "  0. 返回主菜单"
         echo ""
-        read -p "请选择 [0-7]: " web_choice
-        
+        read -p "请选择 [0-8]: " web_choice
+
         case $web_choice in
             1)
                 print_step "安装网页打印服务"
-                
+
                 local existing_bin=$(find_cupsweb_binary)
                 if [ -n "$existing_bin" ]; then
                     echo -e "${YELLOW}cups-web 已安装: $existing_bin${NC}"
@@ -1654,20 +1814,39 @@ web_print_service() {
                         read -p "按回车键继续..."
                         continue
                     fi
-                    systemctl stop cups-web 2>/dev/null || pkill -f "cups-web-linux" 2>/dev/null || true
+                    safe_stop_cupsweb
                     sleep 1
                 fi
-                
+
                 install_cupsweb_local
                 read -p "按回车键继续..."
                 ;;
             2)
+                print_step "更新网页打印服务"
+
+                local existing_bin=$(find_cupsweb_binary)
+                if [ -n "$existing_bin" ]; then
+                    echo -e "${YELLOW}当前安装: $existing_bin${NC}"
+                    echo ""
+                fi
+
+                read -p "确认更新 cups-web? [y/N]: " confirm_update
+                if [[ "$confirm_update" =~ ^[Yy]$ ]]; then
+                    safe_stop_cupsweb
+                    sleep 1
+                    install_cupsweb_local
+                else
+                    print_msg "已取消更新"
+                fi
+                read -p "按回车键继续..."
+                ;;
+            3)
                 echo ""
                 echo -e "${CYAN}========================================${NC}"
                 echo -e "${CYAN}   cups-web 服务状态${NC}"
                 echo -e "${CYAN}========================================${NC}"
                 echo ""
-                
+
                 if systemctl is-active --quiet cups-web 2>/dev/null; then
                     echo -e "运行状态: ${GREEN}● 运行中 (systemd)${NC}"
                     local local_ip=$(hostname -I | awk '{print $1}')
@@ -1679,7 +1858,7 @@ web_print_service() {
                 else
                     echo -e "运行状态: ${RED}● 未运行${NC}"
                 fi
-                
+
                 local found_bin=$(find_cupsweb_binary)
                 if [ -n "$found_bin" ]; then
                     echo -e "安装状态: ${GREEN}已安装${NC}"
@@ -1687,22 +1866,22 @@ web_print_service() {
                 else
                     echo -e "安装状态: ${YELLOW}未安装${NC}"
                 fi
-                
+
                 if [ -f /etc/systemd/system/cups-web.service ]; then
                     local svc_status=$(systemctl is-enabled cups-web 2>/dev/null || echo "未知")
                     echo -e "开机启动: $svc_status"
                 fi
-                
+
                 echo ""
                 read -p "按回车键继续..."
                 ;;
-            3)
+            4)
                 print_step "重启网页打印服务"
                 if systemctl restart cups-web 2>/dev/null; then
                     print_msg "服务已重启"
                 else
                     print_warn "无法通过systemctl重启，尝试手动重启..."
-                    pkill -f "cups-web-linux" 2>/dev/null || true
+                    safe_stop_cupsweb
                     sleep 1
                     local cups_binary=$(find_cupsweb_binary)
                     if [ -n "$cups_binary" ]; then
@@ -1719,14 +1898,13 @@ web_print_service() {
                 fi
                 read -p "按回车键继续..."
                 ;;
-            4)
+            5)
                 print_step "停止网页打印服务"
-                systemctl stop cups-web 2>/dev/null || true
-                pkill -f "cups-web-linux" 2>/dev/null || true
+                safe_stop_cupsweb
                 print_msg "服务已停止"
                 read -p "按回车键继续..."
                 ;;
-            5)
+            6)
                 print_step "启动网页打印服务"
                 if systemctl start cups-web 2>/dev/null; then
                     print_msg "服务已启动"
@@ -1746,7 +1924,7 @@ web_print_service() {
                 fi
                 read -p "按回车键继续..."
                 ;;
-            6)
+            7)
                 print_step "查看服务日志"
                 echo ""
                 if journalctl -u cups-web -n 1 > /dev/null 2>&1; then
@@ -1761,13 +1939,12 @@ web_print_service() {
                 echo ""
                 read -p "按回车键继续..."
                 ;;
-            7)
+            8)
                 print_step "卸载网页打印服务"
                 read -p "确认卸载? [y/N]: " confirm
                 if [[ "$confirm" =~ ^[Yy]$ ]]; then
-                    systemctl stop cups-web 2>/dev/null || true
+                    safe_stop_cupsweb
                     systemctl disable cups-web 2>/dev/null || true
-                    pkill -f "cups-web-linux" 2>/dev/null || true
                     rm -f /etc/systemd/system/cups-web.service
                     mkdir -p /opt/websocket_printer/cups-web
                     touch /opt/websocket_printer/cups-web/.uninstalled
@@ -1787,7 +1964,6 @@ web_print_service() {
         esac
     done
 }
-
 # 显示组件状态
 show_component_status() {
     echo ""
@@ -1884,13 +2060,11 @@ show_component_status() {
         echo -e "  ${YELLOW}⚠${NC} LibreOffice 未安装 (可选)"
     fi
     
-    for pkg in libreoffice-java-common openjdk-8-jre-headless; do
-        if dpkg -l $pkg 2>/dev/null | grep -q "^ii"; then
-            echo -e "  ${GREEN}✓${NC} $pkg"
-        else
-            echo -e "  ${RED}✗${NC} $pkg"
-        fi
-    done
+    if dpkg -l libreoffice-java-common 2>/dev/null | grep -q "^ii"; then
+        echo -e "  ${GREEN}✓${NC} libreoffice-java-common"
+    else
+        echo -e "  ${RED}✗${NC} libreoffice-java-common"
+    fi
     
     if command -v java &> /dev/null; then
         JAVA_VER=$(java -version 2>&1 | head -1)
@@ -2085,15 +2259,13 @@ check_environment() {
         echo -e "  ${YELLOW}⚠${NC} LibreOffice 未安装 (可选)"
     fi
     
-    for pkg in libreoffice-java-common openjdk-8-jre-headless; do
-        if dpkg -l $pkg 2>/dev/null | grep -q "^ii"; then
-            echo -e "  ${GREEN}✓${NC} $pkg"
-        else
-            echo -e "  ${RED}✗${NC} $pkg"
-            missing=$((missing+1))
-            missing_list+=("$pkg")
-        fi
-    done
+    if dpkg -l libreoffice-java-common 2>/dev/null | grep -q "^ii"; then
+        echo -e "  ${GREEN}✓${NC} libreoffice-java-common"
+    else
+        echo -e "  ${RED}✗${NC} libreoffice-java-common"
+        missing=$((missing+1))
+        missing_list+=("libreoffice-java-common")
+    fi
     
     if command -v java &> /dev/null; then
         echo -e "  ${GREEN}✓${NC} Java运行时"
@@ -2114,6 +2286,32 @@ check_environment() {
         echo -e "\n${YELLOW}建议运行选项3 [仅安装缺失组件]${NC}"
     fi
     
+    echo ""
+    echo -e "${CYAN}[ImageMagick PDF 策略检测]${NC}"
+    local im_policy_found=0
+    local im_policy_restricted=0
+    local im_policy_files=(
+        "/etc/ImageMagick-6/policy.xml"
+        "/etc/ImageMagick-7/policy.xml"
+    )
+    
+    for im_policy in "${im_policy_files[@]}"; do
+        if [ -f "$im_policy" ]; then
+            im_policy_found=1
+            if grep -q 'rights="none" pattern="PDF"' "$im_policy" 2>/dev/null; then
+                im_policy_restricted=1
+                echo -e "  ${RED}✗${NC} $im_policy - PDF 策略受限 (rights=none)"
+            else
+                echo -e "  ${GREEN}✓${NC} $im_policy - PDF 策略正常"
+            fi
+        fi
+    done
+    
+    if [ $im_policy_found -eq 0 ]; then
+        echo -e "  ${YELLOW}⚠${NC} 未找到 ImageMagick policy.xml（可能未安装）"
+    elif [ $im_policy_restricted -eq 1 ]; then
+        echo -e "  ${YELLOW}⚠ 建议运行选项1 [完整安装] 或选项3 [仅安装缺失组件] 自动修复${NC}"
+    fi
     echo ""
     read -p "按回车键继续..."
 }
@@ -2287,19 +2485,19 @@ uninstall_menu() {
             print_msg "卸载打印客户端..."
             systemctl stop $SERVICE_NAME 2>/dev/null || true
             systemctl disable $SERVICE_NAME 2>/dev/null || true
-            systemctl stop cups-web 2>/dev/null || true
+            safe_stop_cupsweb
             systemctl disable cups-web 2>/dev/null || true
             rm -rf $INSTALL_DIR 2>/dev/null || true
             rm -f /etc/systemd/system/${SERVICE_NAME}.service 2>/dev/null || true
             rm -f /etc/systemd/system/cups-web.service 2>/dev/null || true
-            systemctl daemon-reload 2>/dev/null || true
+            safe_daemon_reload
             print_msg "✓ 打印客户端已卸载"
             ;;
         2)
             print_msg "卸载打印客户端..."
             systemctl stop $SERVICE_NAME 2>/dev/null || true
             systemctl disable $SERVICE_NAME 2>/dev/null || true
-            systemctl stop cups-web 2>/dev/null || true
+            safe_stop_cupsweb
             systemctl disable cups-web 2>/dev/null || true
             rm -rf $INSTALL_DIR 2>/dev/null || true
             rm -f /etc/systemd/system/${SERVICE_NAME}.service 2>/dev/null || true
@@ -2311,14 +2509,14 @@ uninstall_menu() {
             apt-get autoremove -y 2>/dev/null || true
             rm -rf /etc/cups /var/spool/cups /var/cache/cups 2>/dev/null || true
             
-            systemctl daemon-reload 2>/dev/null || true
+            safe_daemon_reload
             print_msg "✓ 打印客户端和CUPS已卸载"
             ;;
         3)
             print_msg "卸载打印客户端..."
             systemctl stop $SERVICE_NAME 2>/dev/null || true
             systemctl disable $SERVICE_NAME 2>/dev/null || true
-            systemctl stop cups-web 2>/dev/null || true
+            safe_stop_cupsweb
             systemctl disable cups-web 2>/dev/null || true
             rm -rf $INSTALL_DIR 2>/dev/null || true
             rm -f /etc/systemd/system/${SERVICE_NAME}.service 2>/dev/null || true
@@ -2336,7 +2534,7 @@ uninstall_menu() {
             apt-get remove --purge -y avahi-daemon avahi-utils libnss-mdns 2>/dev/null || true
             apt-get autoremove -y 2>/dev/null || true
             
-            systemctl daemon-reload 2>/dev/null || true
+            safe_daemon_reload
             print_msg "✓ 打印客户端、CUPS和Avahi已卸载"
             ;;
         4)
@@ -2345,7 +2543,7 @@ uninstall_menu() {
             print_msg "卸载打印客户端..."
             systemctl stop $SERVICE_NAME 2>/dev/null || true
             systemctl disable $SERVICE_NAME 2>/dev/null || true
-            systemctl stop cups-web 2>/dev/null || true
+            safe_stop_cupsweb
             systemctl disable cups-web 2>/dev/null || true
             rm -rf $INSTALL_DIR 2>/dev/null || true
             rm -f /etc/systemd/system/${SERVICE_NAME}.service 2>/dev/null || true
@@ -2371,7 +2569,7 @@ uninstall_menu() {
             rm -rf /tmp/print_jobs 2>/dev/null || true
             rm -rf /tmp/web_print_uploads 2>/dev/null || true
             
-            systemctl daemon-reload 2>/dev/null || true
+            safe_daemon_reload
             
             echo ""
             print_msg "============================================"
@@ -2673,8 +2871,7 @@ remote_print_management() {
 
 # 显示主菜单
 show_menu() {
-    clear
-    
+    clear && printf "\033[3J" 2>/dev/null || clear
     local run_count=$(get_run_count_from_server)
     [ -z "$run_count" ] && run_count="0"
     
@@ -2715,9 +2912,10 @@ main() {
         exit 1
     fi
     
+    START_TIME=$(date +%s)
+    
     detect_system
     
-    # 只在脚本启动时记录一次运行
     record_run_count_remote "script_start"
     
     while true; do
@@ -2727,6 +2925,9 @@ main() {
             1)
                 full_install
                 show_final_status
+                END_TIME=$(date +%s)
+                ELAPSED=$((END_TIME - START_TIME))
+                print_msg "总耗时: $((ELAPSED / 60)) 分 $((ELAPSED % 60)) 秒"
                 read -p "按回车键继续..."
                 ;;
             2)
@@ -2806,7 +3007,7 @@ case "${1:-}" in
                 systemctl stop $SERVICE_NAME 2>/dev/null || true
                 systemctl disable $SERVICE_NAME 2>/dev/null || true
                 rm -rf $INSTALL_DIR /etc/systemd/system/${SERVICE_NAME}.service
-                systemctl daemon-reload 2>/dev/null || true
+                safe_daemon_reload
                 print_msg "✓ 打印客户端已卸载"
                 ;;
             2)
@@ -2815,7 +3016,7 @@ case "${1:-}" in
                 rm -rf $INSTALL_DIR /etc/systemd/system/${SERVICE_NAME}.service
                 apt-get remove --purge -y cups cups-client cups-bsd cups-ipp-utils cups-filters cups-browsed 2>/dev/null || true
                 rm -rf /etc/cups
-                systemctl daemon-reload 2>/dev/null || true
+                safe_daemon_reload
                 print_msg "✓ 打印客户端和CUPS已卸载"
                 ;;
             3)
@@ -2824,7 +3025,7 @@ case "${1:-}" in
                 rm -rf $INSTALL_DIR /etc/systemd/system/${SERVICE_NAME}.service
                 apt-get remove --purge -y cups cups-client cups-bsd cups-ipp-utils cups-filters cups-browsed avahi-daemon avahi-utils libnss-mdns 2>/dev/null || true
                 rm -rf /etc/cups
-                systemctl daemon-reload 2>/dev/null || true
+                safe_daemon_reload
                 print_msg "✓ 打印客户端、CUPS和Avahi已卸载"
                 ;;
             4)
@@ -2834,7 +3035,7 @@ case "${1:-}" in
                 apt-get remove --purge -y cups cups-client cups-bsd cups-ipp-utils cups-filters cups-browsed avahi-daemon avahi-utils libnss-mdns printer-driver-gutenprint hplip printer-driver-escpr printer-driver-brlaser printer-driver-splix 2>/dev/null || true
                 apt-get autoremove -y 2>/dev/null || true
                 rm -rf /etc/cups /var/spool/cups /var/cache/cups
-                systemctl daemon-reload 2>/dev/null || true
+                safe_daemon_reload
                 print_msg "✓ 完全卸载完成"
                 ;;
             0)
